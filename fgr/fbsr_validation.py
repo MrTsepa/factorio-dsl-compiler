@@ -1,0 +1,175 @@
+"""Validate the verifier's *model* against Factorio's real data, via FBSR.
+
+The verifier (`fgr/verify.py`) decides whether items can flow A->B by reasoning
+about geometry: how big each entity is, and — crucially — which tile an inserter
+picks from vs. drops to. Those facts are assumptions, and a wrong assumption
+silently makes the oracle agree with broken layouts (we hit exactly this: the
+inserter `direction` quirk). So the assumptions themselves need an independent
+check against ground truth.
+
+FBSR embeds Factorio's actual `data.raw`. Its `dump-entity` command writes a
+prototype's real fields — `pickup_position`, `insert_position`, `selection_box` —
+to `build/<profile>/debug/`. This module reads those and asserts:
+
+* the verifier's inserter rule (pick at ``T + DIR_DELTA[dir]``, drop at the
+  opposite tile) reproduces Factorio's real rotated pickup/insert positions for
+  *every* orientation; and
+* each entity's tile footprint matches the generator/verifier ``SIZE`` table.
+
+This is a *static* validation — FBSR renders, it does not simulate, so it cannot
+prove throughput. But connectivity is a topological property derived from exactly
+these geometric facts, so pinning them to real data closes the gap that caused the
+inserter bug. (For a dynamic flow check you'd drive the real game over RCON; out
+of scope here.)
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+from .ir import DIR_DELTA, EAST, NORTH, SOUTH, WEST, Graph, Node, NodeKind
+from .layout import CHEST_INPUT, CHEST_OUTPUT, INSERTER, Layout, PlacedEntity, SIZE
+from .verify import verify
+
+CARDINALS = [NORTH, EAST, SOUTH, WEST]
+PROTOS = sorted(SIZE)  # the entities the compiler/verifier actually use
+
+_DEFAULT_HOME = Path.home() / "Workspace" / "Factorio-FBSR" / "FactorioBlueprintStringRenderer"
+
+
+class FbsrUnavailable(RuntimeError):
+    """Raised when neither dumps nor the FBSR CLI are available to produce them."""
+
+
+@dataclass
+class Check:
+    name: str
+    ok: bool
+    detail: str = ""
+
+
+def fbsr_home() -> Path:
+    return Path(os.environ.get("FGR_FBSR_HOME", str(_DEFAULT_HOME)))
+
+
+def _dump_dir(profile: str = "vanilla") -> Path:
+    return fbsr_home() / "build" / profile / "debug"
+
+
+def _round_vec(v) -> tuple[int, int]:
+    return (round(v[0]), round(v[1]))
+
+
+def _rotate_cw(v, quarter_turns: int) -> tuple[float, float]:
+    """Rotate a (x, y) offset clockwise by N quarter turns (Factorio y points down)."""
+    x, y = v
+    for _ in range(quarter_turns % 4):
+        x, y = -y, x
+    return (x, y)
+
+
+def _load_proto(proto: str, profile: str, dumper) -> dict:
+    """Return a prototype's dumped JSON, generating the dump on demand if needed."""
+    ddir = _dump_dir(profile)
+    pattern = str(ddir / f"{profile} entity {proto} *.json")
+    matches = sorted(glob.glob(pattern))
+    if not matches and dumper is not None:
+        dumper(proto)
+        matches = sorted(glob.glob(pattern))
+    if not matches:
+        raise FbsrUnavailable(
+            f"no prototype dump for {proto!r} in {ddir} and could not generate one")
+    return json.load(open(matches[-1]))  # newest (e.g. highest version) wins
+
+
+def _fbsr_dumper():
+    """A callback that runs `fbsr.sh dump-entity <proto>` to create missing dumps."""
+    from .render import fbsr_script
+    script = fbsr_script()
+    if not script.exists():
+        return None
+
+    def dump(proto: str) -> None:
+        subprocess.run(["bash", str(script), "dump-entity", proto],
+                       capture_output=True, text=True, timeout=120)
+
+    return dump
+
+
+def validate(profile: str = "vanilla", dumper="auto") -> list[Check]:
+    """Run all model checks against FBSR's data; return a list of :class:`Check`."""
+    if dumper == "auto":
+        dumper = _fbsr_dumper()
+    checks: list[Check] = []
+
+    # --- inserter pickup/drop semantics ---
+    ins = _load_proto("inserter", profile, dumper)
+    pickup = ins.get("pickup_position")
+    insert = ins.get("insert_position")
+    if pickup is None or insert is None:
+        checks.append(Check("inserter exposes pickup/insert_position", False,
+                            f"missing in dump: {sorted(ins)[:8]}..."))
+        return checks
+
+    bad = []
+    for d in CARDINALS:
+        exp_pick = DIR_DELTA[d]
+        got_pick = _round_vec(_rotate_cw(pickup, d // 4))
+        exp_drop = (-DIR_DELTA[d][0], -DIR_DELTA[d][1])
+        got_drop = _round_vec(_rotate_cw(insert, d // 4))
+        if got_pick != exp_pick:
+            bad.append(f"dir {d}: real pickup {got_pick} != verifier {exp_pick}")
+        if got_drop != exp_drop:
+            bad.append(f"dir {d}: real drop {got_drop} != verifier {exp_drop}")
+    checks.append(Check(
+        "inserter picks at +direction, drops at -direction (all orientations)",
+        not bad,
+        f"Factorio base pickup={pickup}, insert={insert}" if not bad else "; ".join(bad)))
+
+    # --- exercise the REAL verifier on a probe, not just the constants ---
+    # Place chest -> inserter -> chest using Factorio's true pickup/insert tiles,
+    # then assert verify() discovers the lane in the game-accurate direction. This
+    # catches a sign regression inside verify.py itself, not only in DIR_DELTA.
+    probe_bad = []
+    for d in CARDINALS:
+        pick_off = _round_vec(_rotate_cw(pickup, d // 4))
+        drop_off = _round_vec(_rotate_cw(insert, d // 4))
+        g = Graph()
+        g.add_node(Node("A", NodeKind.INPUT, item="iron-plate"))
+        g.add_node(Node("B", NodeKind.OUTPUT))
+        g.add_edge("A", "B")
+        lay = Layout([
+            PlacedEntity(CHEST_INPUT, pick_off[0], pick_off[1], item="iron-plate", meta={"node": "A"}),
+            PlacedEntity(CHEST_OUTPUT, drop_off[0], drop_off[1], meta={"node": "B"}),
+            PlacedEntity(INSERTER, 0, 0, direction=d, meta={"role": "probe"}),
+        ])
+        found = verify(g, lay).lanes_found
+        if found != {("A", "B")}:
+            probe_bad.append(f"dir {d}: verifier saw {found or '{}'} , expected {{('A','B')}}")
+    checks.append(Check("real verify() agrees with Factorio inserter flow (probe, all dirs)",
+                        not probe_bad, "" if not probe_bad else "; ".join(probe_bad)))
+
+    # --- entity footprints ---
+    foot_bad = []
+    for proto in PROTOS:
+        d = _load_proto(proto, profile, dumper)
+        box = d.get("selection_box") or d.get("collision_box")
+        w = round(box[1][0] - box[0][0])
+        h = round(box[1][1] - box[0][1])
+        if (w, h) != SIZE[proto]:
+            foot_bad.append(f"{proto}: real {w}x{h} != SIZE {SIZE[proto]}")
+    checks.append(Check("entity footprints match the SIZE table", not foot_bad,
+                        f"checked {', '.join(PROTOS)}" if not foot_bad else "; ".join(foot_bad)))
+    return checks
+
+
+def format_checks(checks: list[Check]) -> str:
+    lines = [f"  [{'ok  ' if c.ok else 'FAIL'}] {c.name}" + (f" — {c.detail}" if c.detail else "")
+             for c in checks]
+    lines.append(f"\n  => {'PASS' if all(c.ok for c in checks) else 'FAIL'}")
+    return "\n".join(lines)

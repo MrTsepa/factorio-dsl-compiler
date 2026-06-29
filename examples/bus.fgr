@@ -1,0 +1,21 @@
+# One belt feeding several consumers, via splitters.
+#
+#                         .-> assembler gears   -> out_gears
+#   iron --(one belt)----+--> assembler sticks  -> out_sticks
+#                         '-> output  out_raw
+#
+# `iron -> gears, sticks, out_raw` is a SINGLE output belt off the iron chest; the
+# compiler builds a splitter chain that peels one branch per consumer. Contrast
+# with writing three separate `iron -> ...` lines, which would demand three output
+# inserters on the (1x1) iron chest — impossible. The shared belt needs only one.
+
+input     iron    : iron-plate
+assembler gears   : iron-gear-wheel
+assembler sticks  : iron-stick
+output    out_gears
+output    out_sticks
+output    out_raw
+
+iron  -> gears, sticks, out_raw
+gears  -> out_gears
+sticks -> out_sticks

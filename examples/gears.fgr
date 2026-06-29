@@ -1,0 +1,14 @@
+# The "hello world" factory: turn iron plates into gears, ship the gears out.
+#
+#   input chest --belt--> assembler (iron-gear-wheel) --belt--> output chest
+#
+# We declare WHAT the factory is; the compiler decides WHERE everything goes
+# (assembler position, inserters, and the actual belt tile paths) and the
+# verifier confirms the placed layout really carries items along each lane.
+
+input     iron  : iron-plate
+assembler gears : iron-gear-wheel
+output    out
+
+iron  -> gears
+gears -> out

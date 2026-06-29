@@ -1,0 +1,20 @@
+# A two-stage factory with a multi-input assembler.
+#
+# copper-plate -> copper-cable -.
+#                                +-> electronic-circuit -> output
+# iron-plate -------------------'
+#
+# `circuit` pulls TWO lanes (iron + cable); the compiler must give it two input
+# inserters on its west side and route both belt lanes without collisions. The
+# iron lane also has to travel PAST the cable column to reach the circuit column.
+
+input     copper  : copper-plate
+input     iron    : iron-plate
+assembler cable   : copper-cable
+assembler circuit : electronic-circuit
+output    chips
+
+copper -> cable
+cable  -> circuit
+iron   -> circuit
+circuit -> chips

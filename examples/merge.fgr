@@ -1,0 +1,17 @@
+# Merge: two sources onto ONE belt, via a splitter.
+#
+#   iron_a --.
+#            +--(one merged belt)--> assembler gears -> out
+#   iron_b --'
+#
+# `iron_a, iron_b -> gears` is the mirror of fan-out: each source gets its own
+# output inserter, a splitter combines both onto a single belt, and `gears` is fed
+# by just ONE input inserter. (A splitter merges as well as it splits.)
+
+input     iron_a : iron-plate
+input     iron_b : iron-plate
+assembler gears  : iron-gear-wheel
+output    out
+
+iron_a, iron_b -> gears
+gears -> out

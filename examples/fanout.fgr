@@ -1,0 +1,16 @@
+# Fan-out: ONE belt off the cable assembler feeds two consumers (via a splitter).
+#
+#                       .-> output spool_a
+#   copper -> cable ---+   (single shared belt, splitter bus)
+#                       '-> output spool_b
+#
+# `cable -> spool_a, spool_b` is one output belt; the compiler runs a south-flowing
+# trunk off the assembler and a splitter peels each consumer off it.
+
+input     copper : copper-plate
+assembler cable  : copper-cable
+output    spool_a
+output    spool_b
+
+copper -> cable
+cable  -> spool_a, spool_b

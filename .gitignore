@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.png
+*.bp.txt
+out/
+# generated artifacts (regenerate with scripts/build_report.py; the report embeds
+# every render as base64, so it's large — keep it out of git history)
+report.html
+renders/

@@ -1,0 +1,19 @@
+# A deeper, recipe-correct chain: red science (automation-science-pack).
+#
+#   iron-plate -> iron-gear-wheel --.
+#                                    +-> automation-science-pack -> output
+#   copper-plate -------------------'
+#
+# automation-science-pack really is 1 gear + 1 copper plate, so this is a valid
+# factory. Shows a 3-deep graph and a multi-input final assembler.
+
+input     iron    : iron-plate
+input     copper  : copper-plate
+assembler gears   : iron-gear-wheel
+assembler science : automation-science-pack
+output    out
+
+iron   -> gears
+gears  -> science
+copper -> science
+science -> out

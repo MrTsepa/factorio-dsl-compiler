@@ -1,0 +1,22 @@
+[project]
+name = "fgr"
+version = "0.1.0"
+description = "A high-level DSL for Factorio factories that deterministically compiles to a real, renderable layout."
+requires-python = ">=3.10"
+dependencies = []  # the compiler is pure stdlib; rendering shells out to the sibling Factorio-FBSR
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+fgr = "fgr.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["fgr"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
