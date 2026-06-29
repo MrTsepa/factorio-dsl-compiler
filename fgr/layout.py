@@ -622,6 +622,8 @@ def compile_graph(graph: Graph) -> Layout:
         occ.discard(start)                             # free our reserved start for the riser
         cand = [(a, i, d) for a, i, d in _input_slots(bodies[c])
                 if i not in occ and i not in used_ins[c] and a not in occ]
+        reserved = {i for _, i, _ in cand}             # keep risers off the inserter tiles
+        occ |= reserved
         laid = None
         for anchor, ins, d in cand:                    # (1) fast deterministic L-route
             occ.discard(anchor)
@@ -638,6 +640,7 @@ def compile_graph(graph: Graph) -> Layout:
                     laid = (ins, d)
                     break
                 occ.add(anchor)
+        occ -= (reserved - ({laid[0]} if laid else set()))   # free unused inserter tiles
         if laid is not None:                           # connect: tap the trunk + input inserter
             ins, d = laid
             layout.add(PlacedEntity(INSERTER, tap[0], tap[1], direction=SOUTH,
