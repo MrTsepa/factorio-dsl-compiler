@@ -81,10 +81,12 @@ def _rot_cw(v, k):
 import math
 
 
-def _fluid_connections(proto, x, y, direction):
-    """External pipe tiles for an entity's fluid boxes, rotated by ``direction``: a list
-    of (tile, flow) where flow is 'input'|'output'|'both' and tile is where a pipe must
-    sit to attach to that box."""
+def _fluid_connections(proto, x, y, direction, with_dir=False):
+    """External pipe tiles for an entity's fluid boxes, rotated by ``direction``: a list of
+    (tile, flow) where flow is 'input'|'output'|'both' and tile is where a pipe must sit to
+    attach to that box. With ``with_dir=True`` each entry is (tile, flow, machine_dir) where
+    machine_dir is the direction from the external tile back toward the machine (the way a
+    pipe-to-ground's open mouth must face to feed the box)."""
     if proto not in FLUID_BOX:
         return []
     w, h = SIZE[proto]
@@ -96,7 +98,8 @@ def _fluid_connections(proto, x, y, direction):
         rd = (d + d0) % 16
         ctile = (math.floor(cx + rpx), math.floor(cy + rpy))
         dxy = DIR_DELTA[rd]
-        out.append(((ctile[0] + dxy[0], ctile[1] + dxy[1]), flow))
+        ext = (ctile[0] + dxy[0], ctile[1] + dxy[1])
+        out.append((ext, flow, OPPOSITE[rd]) if with_dir else (ext, flow))
     return out
 
 
@@ -705,14 +708,20 @@ def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP):
     return None
 
 
-def _lay_belt_path(layout, occ, path, meta):
-    """Lay a BFS tile path (from _pipe_path) DIRECTLY as belts + underground-belts. Adjacent
-    tiles -> belt; a gap (a tunnel jump) -> underground entrance/exit. The BFS guarantees a
-    tunnel is entered/left straight and never abuts another tunnel, so every tile has one
-    role. Returns the set of tiles used, or None if an endpoint is occupied."""
+def _lay_belt_path(layout, occ, path, meta, pipe=False):
+    """Lay a BFS tile path (from _pipe_path) DIRECTLY as belts (or pipes). Adjacent tiles ->
+    belt/pipe; a gap (a tunnel jump) -> underground/pipe-to-ground entrance+exit. The BFS
+    guarantees a tunnel is entered/left straight and never abuts another, so every tile has
+    one role. Returns the set of tiles used, or None if an endpoint is occupied."""
     if path[0] in occ or path[-1] in occ:
         return None
     n = len(path)
+    if n == 1:                                          # single tile: one belt/pipe
+        t = path[0]
+        layout.add(PlacedEntity(PIPE if pipe else BELT, t[0], t[1],
+                                direction=None if pipe else EAST, meta=meta))
+        occ.add(t)
+        return {t}
     dirs = [delta_to_dir(_sign(path[i + 1][0] - path[i][0]),
                          _sign(path[i + 1][1] - path[i][1])) for i in range(n - 1)]
     placed, used = [], set()
@@ -732,7 +741,13 @@ def _lay_belt_path(layout, occ, path, meta):
         else:
             placed.append(("belt", t, d_out)); used.add(t)
     for kind, t, d in placed:
-        if kind == "belt":
+        if pipe:
+            if kind == "belt":
+                layout.add(PlacedEntity(PIPE, t[0], t[1], meta=meta))
+            else:                                       # p2g: direction = OPEN mouth
+                layout.add(PlacedEntity(PIPE_TO_GROUND, t[0], t[1],
+                                        direction=OPPOSITE[d] if kind == "ug_in" else d, meta=meta))
+        elif kind == "belt":
             layout.add(PlacedEntity(BELT, t[0], t[1], direction=d, meta=meta))
         else:
             layout.add(PlacedEntity(UNDERGROUND, t[0], t[1], direction=d,
@@ -754,13 +769,42 @@ def _waypoints(path):
     return wp
 
 
+def _box_attach(layout, occ, box, mdir, net):
+    """Attach a pipe to a fluid box at `box` (machine in direction `mdir`). Prefers a PLAIN
+    pipe on the box (routing then connects 4-adjacently); if the box's route side is blocked
+    (e.g. a belt), instead drop a pipe-to-ground ON the box facing the machine and tunnel
+    straight OUT under whatever, returning the exit tile. Returns the anchor tile routing
+    should connect to, or None."""
+    away = OPPOSITE[mdir]
+    dx, dy = DIR_DELTA[away]
+    occ.discard(box)
+    if (box[0] + dx, box[1] + dy) not in occ:                  # route side open -> plain pipe
+        layout.add(PlacedEntity(PIPE, box[0], box[1], meta={"role": "pipe", "net": net}))
+        occ.add(box)
+        return box
+    for m in range(2, PIPE_UG_GAP + 1):                        # tunnel out under the belts
+        ex = (box[0] + dx * m, box[1] + dy * m)
+        if ex not in occ:
+            layout.add(PlacedEntity(PIPE_TO_GROUND, box[0], box[1], direction=mdir,
+                                    meta={"role": "pipe", "net": net}))      # mouth -> machine
+            layout.add(PlacedEntity(PIPE_TO_GROUND, ex[0], ex[1], direction=away,
+                                    meta={"role": "pipe", "net": net}))      # exit -> forward
+            for k in range(1, m):
+                occ.add((box[0] + dx * k, box[1] + dy * k))    # buried
+            occ.add(box)
+            occ.add(ex)
+            return ex
+    occ.add(box)
+    return None
+
+
 def _emit_fluids(graph, layout, bodies, occ):
-    """Place pipe networks for fluid lanes. One network per fluid SOURCE (or producer):
-    its output box -> each consumer's input box, routed as straight-ish pipe trees."""
+    """Place pipe networks for fluid lanes. One network per fluid SOURCE: its output box is
+    attached, then each consumer's input box is attached and linked into the network with a
+    mostly-UNDERGROUND pipe run (tunnels straight under the belt field, saving space)."""
     fluid_edges = [e for e in graph.edges if e.fluid]
     if not fluid_edges:
         return
-    # group by source (producer)
     by_src: dict[str, list] = {}
     for e in fluid_edges:
         by_src.setdefault(e.src, []).append(e.dst)
@@ -768,11 +812,11 @@ def _emit_fluids(graph, layout, bodies, occ):
 
     def pick_box(name, want):
         b = bodies[name]
-        for tile, flow in _fluid_connections(b.proto, b.x, b.y, b.direction):
+        for tile, flow, mdir in _fluid_connections(b.proto, b.x, b.y, b.direction, with_dir=True):
             if tile in box_used[name] or (flow != want and flow != "both"):
                 continue
             box_used[name].add(tile)
-            return tile
+            return tile, mdir
         return None
 
     xs = [t[0] for e in layout.entities for t in e.tiles()]
@@ -780,24 +824,30 @@ def _emit_fluids(graph, layout, bodies, occ):
     bounds = (min(xs) - 12, max(xs) + 12, min(ys) - 12, max(ys) + 12)
 
     for src in [n for n in graph.nodes if n in by_src]:        # deterministic order
-        dsts = by_src[src]
-        sbox = pick_box(src, "output")
-        if sbox is None:
-            continue  # skip: no free output box
-        occ.discard(sbox)
-        layout.add(PlacedEntity(PIPE, sbox[0], sbox[1], meta={"role": "pipe", "net": src}))
-        occ.add(sbox)
-        net = {sbox}
-        for d in dsts:
-            dbox = pick_box(d, "input")
-            if dbox is None:
-                continue  # skip: no free input box
-            occ.discard(dbox)
-            path = _pipe_path(occ, net, dbox, bounds)
-            if path is None:
-                continue  # skip unroutable fluid lane (reported by the verifier)
-            wp = _waypoints(path[1:]) if len(path) > 1 else [dbox]   # drop the net start tile
-            used = _lay_polyline(layout, occ, wp, {"role": "pipe", "net": src}, pipe=True)
-            if used is None:
+        sb = pick_box(src, "output")
+        if sb is None:
+            continue
+        sa = _box_attach(layout, occ, sb[0], sb[1], src)
+        if sa is None:
+            continue
+        net = {sa}
+        for d in by_src[src]:
+            db = pick_box(d, "input")
+            if db is None:
                 continue
-            net |= set(path)
+            da = _box_attach(layout, occ, db[0], db[1], src)
+            if da is None:
+                continue
+            occ.discard(da)
+            path = _pipe_path(occ, net, da, bounds)            # net anchors -> this anchor
+            occ.add(da)
+            if path is None:
+                continue
+            # lay only the interior (endpoints are already the anchor pipes); they connect
+            # 4-adjacently to path[1] / path[-2].
+            interior = path[1:-1]
+            ok = True
+            if interior:
+                ok = _lay_belt_path(layout, occ, interior, {"role": "pipe", "net": src}, pipe=True) is not None
+            if ok:
+                net |= set(path)

@@ -313,8 +313,13 @@ def _check_fluids(graph: Graph, layout: Layout, bodies, report: Report) -> None:
     out_nets, in_nets = {}, {}                         # name -> set of pipe networks at its boxes
     for name, b in bodies.items():
         on, inn = set(), set()
-        for tile, flow in _fluid_connections(b.proto, b.x, b.y, b.direction):
-            if tile not in pipes:
+        for tile, flow, mdir in _fluid_connections(b.proto, b.x, b.y, b.direction, with_dir=True):
+            # a fluid box attaches to a PLAIN pipe on its external tile, OR a pipe-to-ground
+            # whose open mouth faces the machine (mdir). A p2g facing any other way does NOT
+            # feed the box (its underground side connects to its tunnel partner, not here).
+            pe = pipes.get(tile)
+            if pe is None or not (pe.proto == PIPE or
+                                  (pe.proto == PIPE_TO_GROUND and (pe.direction or 0) == mdir)):
                 continue
             net = find(tile)
             if flow in ("output", "both"):
@@ -337,8 +342,10 @@ def _check_fluids(graph: Graph, layout: Layout, bodies, report: Report) -> None:
     net_fluids: dict = {}
     for name, b in bodies.items():
         if b.proto == FLUID_SOURCE and b.item:
-            for tile, _flow in _fluid_connections(b.proto, b.x, b.y, b.direction):
-                if tile in pipes:
+            for tile, _flow, mdir in _fluid_connections(b.proto, b.x, b.y, b.direction, with_dir=True):
+                pe = pipes.get(tile)
+                if pe is not None and (pe.proto == PIPE or
+                                       (pe.proto == PIPE_TO_GROUND and (pe.direction or 0) == mdir)):
                     net_fluids.setdefault(find(tile), set()).add(b.item)
     mixed = sorted("+".join(sorted(fl)) for fl in net_fluids.values() if len(fl) > 1)
     report.add("no fluid mixing (one fluid per pipe network)", not mixed,
