@@ -1,11 +1,11 @@
-# Fan-out: ONE belt off the cable assembler feeds two consumers (via a splitter).
+# Fan-out: ONE belt off the cable assembler feeds two consumers (inline taps, no splitter).
 #
 #                       .-> output spool_a
-#   copper -> cable ---+   (single shared belt, splitter bus)
+#   copper -> cable ---+   (single shared belt, tapped per consumer)
 #                       '-> output spool_b
 #
-# `cable -> spool_a, spool_b` is one output belt; the compiler runs a south-flowing
-# trunk off the assembler and a splitter peels each consumer off it.
+# `cable -> spool_a, spool_b` is one output belt; the compiler runs a trunk off the
+# assembler and each consumer taps it with its own inserter where the belt passes.
 
 input     copper : copper-plate
 assembler cable  : copper-cable

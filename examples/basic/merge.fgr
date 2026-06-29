@@ -1,12 +1,12 @@
-# Merge: two sources onto ONE belt, via a splitter.
+# Merge: two sources into one machine, each tapping it directly (NO splitter).
 #
 #   iron_a --.
-#            +--(one merged belt)--> assembler gears -> out
+#            +--> assembler gears -> out
 #   iron_b --'
 #
-# `iron_a, iron_b -> gears` is the mirror of fan-out: each source gets its own
-# output inserter, a splitter combines both onto a single belt, and `gears` is fed
-# by just ONE input inserter. (A splitter merges as well as it splits.)
+# `iron_a, iron_b -> gears` is the mirror of fan-out: each source keeps its own
+# belt and taps `gears` with its own input inserter (on a distinct face) — a
+# multi-tap merge, no splitter/merge gadget.
 
 input     iron_a : iron-plate
 input     iron_b : iron-plate
