@@ -432,6 +432,15 @@ def compile_graph(graph: Graph) -> Layout:
     for b in bodies.values():
         occ |= set(b.tiles())
 
+    # reserve fluid-box external tiles of fluid-active bodies so item inserters avoid them
+    # (a stray belt/inserter on a box would weld or block a fluid network).
+    fluid_nodes = ({e.src for e in graph.edges if e.fluid}
+                   | {e.dst for e in graph.edges if e.fluid})
+    for name, b in bodies.items():
+        if b.proto in (CHEMICAL, FLUID_SOURCE, TANK) or name in fluid_nodes:
+            for tile, _flow in _fluid_connections(b.proto, b.x, b.y, b.direction):
+                occ.add(tile)
+
     band_bot = max((b.y + b.size[1] - 1 for b in bodies.values()), default=0)
     Rp = {p: band_bot + 2 + 3 * i      # spacing 3: 2 free rows between trunks -> clean dives
           for i, p in enumerate(sorted(producers, key=lambda n: (col[n], cr[n])))}
@@ -545,4 +554,114 @@ def compile_graph(graph: Graph) -> Layout:
         if not _lay_polyline(layout, occ, pts, {"role": "riser", "edge": (p, c)}):
             raise LayoutError(f"could not lay riser for lane {p}->{c}")
 
+    _emit_fluids(graph, layout, bodies, occ)
     return layout
+
+
+# ---------------------------------------------------------------------------
+# Fluids: a small BFS pipe router (fluids are sparse -> no congestion/rip-up).
+# ---------------------------------------------------------------------------
+def _pipe_path(occ, starts, goal, bounds):
+    """BFS a tile path from any tile in ``starts`` to ``goal``, stepping to free tiles or
+    JUMPING over an occupied run (<= PIPE_UG_GAP) to a free tile. The first move out of a
+    start tile is always adjacent (so the laid pipe connects 4-adjacently to the net).
+    Returns the tile path [start..goal] (only surface tiles), or None."""
+    from collections import deque
+    lo_x, hi_x, lo_y, hi_y = bounds
+    starts = set(starts)
+
+    def free(t):
+        return lo_x <= t[0] <= hi_x and lo_y <= t[1] <= hi_y and (t not in occ or t == goal)
+
+    q = deque(starts)
+    prev = {s: (None, None) for s in starts}            # tile -> (parent, dir_from_parent)
+    while q:
+        cur = q.popleft()
+        if cur == goal:
+            path = [cur]
+            while prev[path[-1]][0] is not None:
+                path.append(prev[path[-1]][0])
+            path.reverse()
+            return path
+        came = prev[cur][1]
+        for d in (EAST, SOUTH, NORTH, WEST):
+            dx, dy = DIR_DELTA[d]
+            nb = (cur[0] + dx, cur[1] + dy)
+            if nb not in prev and free(nb):
+                prev[nb] = (cur, d)
+                q.append(nb)
+            # jump over an occupied run, but ONLY when arriving straight (so the tunnel
+            # entrance `cur` is not a corner -- an underground end can't turn).
+            elif nb not in prev and nb in occ and nb != goal and came == d:
+                m = 2
+                while m <= PIPE_UG_GAP:
+                    ex = (cur[0] + dx * m, cur[1] + dy * m)
+                    if free(ex):
+                        if ex not in prev:
+                            prev[ex] = (cur, d)
+                            q.append(ex)
+                        break
+                    m += 1
+    return None
+
+
+def _waypoints(path):
+    """Collapse a tile path to corner waypoints (where direction changes)."""
+    if len(path) <= 2:
+        return list(path)
+    wp = [path[0]]
+    for i in range(1, len(path) - 1):
+        if (path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]) != \
+           (path[i + 1][0] - path[i][0], path[i + 1][1] - path[i][1]):
+            wp.append(path[i])
+    wp.append(path[-1])
+    return wp
+
+
+def _emit_fluids(graph, layout, bodies, occ):
+    """Place pipe networks for fluid lanes. One network per fluid SOURCE (or producer):
+    its output box -> each consumer's input box, routed as straight-ish pipe trees."""
+    fluid_edges = [e for e in graph.edges if e.fluid]
+    if not fluid_edges:
+        return
+    # group by source (producer)
+    by_src: dict[str, list] = {}
+    for e in fluid_edges:
+        by_src.setdefault(e.src, []).append(e.dst)
+    box_used = {n: set() for n in bodies}
+
+    def pick_box(name, want):
+        b = bodies[name]
+        for tile, flow in _fluid_connections(b.proto, b.x, b.y, b.direction):
+            if tile in box_used[name] or (flow != want and flow != "both"):
+                continue
+            box_used[name].add(tile)
+            return tile
+        return None
+
+    xs = [t[0] for e in layout.entities for t in e.tiles()]
+    ys = [t[1] for e in layout.entities for t in e.tiles()]
+    bounds = (min(xs) - 12, max(xs) + 12, min(ys) - 12, max(ys) + 12)
+
+    for src in [n for n in graph.nodes if n in by_src]:        # deterministic order
+        dsts = by_src[src]
+        sbox = pick_box(src, "output")
+        if sbox is None:
+            raise LayoutError(f"fluid source {src!r}: no free output box")
+        occ.discard(sbox)
+        layout.add(PlacedEntity(PIPE, sbox[0], sbox[1], meta={"role": "pipe", "net": src}))
+        occ.add(sbox)
+        net = {sbox}
+        for d in dsts:
+            dbox = pick_box(d, "input")
+            if dbox is None:
+                raise LayoutError(f"fluid lane {src}~>{d}: no free input box on {d!r}")
+            occ.discard(dbox)
+            path = _pipe_path(occ, net, dbox, bounds)
+            if path is None:
+                raise LayoutError(f"could not route fluid lane {src}~>{d}")
+            wp = _waypoints(path[1:]) if len(path) > 1 else [dbox]   # drop the net start tile
+            used = _lay_polyline(layout, occ, wp, {"role": "pipe", "net": src}, pipe=True)
+            if used is None:
+                raise LayoutError(f"could not lay fluid lane {src}~>{d}")
+            net |= set(path)
