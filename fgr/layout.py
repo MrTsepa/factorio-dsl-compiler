@@ -591,8 +591,8 @@ def compile_graph(graph: Graph) -> Layout:
     for p in producers:
         xs = [vx_riser[(p, e.dst)] for e in consumers_of[p]] + [vx_feed[p]]
         x0, x1 = min(xs), max(xs)
-        pts = [(x0, Rp[p]), (x1, Rp[p]), (x1, Rp[p] + 1)]
-        if not _lay_polyline(layout, occ, pts, {"role": "trunk", "src": p}):
+        pts = [(x0, Rp[p]), (x1, Rp[p]), (x1, Rp[p] + 1)]   # south tail: terminal belt turns
+        if not _lay_polyline(layout, occ, pts, {"role": "trunk", "src": p}):   # into empty, so
             _lay_polyline(layout, occ, [(x0, Rp[p]), (x1, Rp[p])], {"role": "trunk", "src": p})
     # 2) feeds (producer body -> its trunk), jogging to the feed column then diving down
     for p in producers:
