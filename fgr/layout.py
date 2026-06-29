@@ -612,54 +612,43 @@ def compile_graph(graph: Graph) -> Layout:
     # 3) risers: tap the producer trunk, then route up to a consumer input port. Try the
     # candidate ports (west bottom-first, then south/north/east) and use the FIRST whose
     # riser lays cleanly -- so a riser never has to cross a direct belt right at its corner.
+    bx_max = max(b.x + b.size[0] for b in bodies.values())
+    by_min = min(b.y for b in bodies.values())
+    bfs_bounds = (-2, bx_max + 4, by_min - 8, band_bot + 3 * len(row_end) + 6)
     for e in ch_edges:
         p, c = e.src, e.dst
         rx = vx_riser[(p, c)]
-        tap = (rx, Rp[p] - 1)
-        layout.add(PlacedEntity(INSERTER, tap[0], tap[1], direction=SOUTH,
-                                meta={"role": "tap", "edge": (p, c)}))
-        occ.add(tap)
-        start = (rx, Rp[p] - 2)
-        occ.discard(start)                             # our own reserved start
+        tap, start = (rx, Rp[p] - 1), (rx, Rp[p] - 2)
+        occ.discard(start)                             # free our reserved start for the riser
         cand = [(a, i, d) for a, i, d in _input_slots(bodies[c])
                 if i not in occ and i not in used_ins[c] and a not in occ]
-        done = False
-        # (1) fast deterministic L-route to the first port that lays cleanly
-        for anchor, ins, d in cand:
+        laid = None
+        for anchor, ins, d in cand:                    # (1) fast deterministic L-route
             occ.discard(anchor)
             pts = [start, anchor] if rx == anchor[0] else [start, (rx, anchor[1]), anchor]
-            if _lay_polyline(layout, occ, pts, {"role": "riser", "edge": (p, c)}) is None:
+            if _lay_polyline(layout, occ, pts, {"role": "riser", "edge": (p, c)}) is not None:
+                laid = (ins, d)
+                break
+            occ.add(anchor)
+        if laid is None:                               # (2) bounded BFS via the open north
+            for anchor, ins, d in cand:
+                occ.discard(anchor)
+                path = _pipe_path(occ, {start}, anchor, bfs_bounds, max_gap=UG_MAX_GAP)
+                if path and _lay_belt_path(layout, occ, path, {"role": "riser", "edge": (p, c)}):
+                    laid = (ins, d)
+                    break
                 occ.add(anchor)
-                continue
+        if laid is not None:                           # connect: tap the trunk + input inserter
+            ins, d = laid
+            layout.add(PlacedEntity(INSERTER, tap[0], tap[1], direction=SOUTH,
+                                    meta={"role": "tap", "edge": (p, c)}))
+            occ.add(tap)
             layout.add(PlacedEntity(INSERTER, ins[0], ins[1], direction=d,
                                     meta={"role": "in", "edge": (p, c)}))
             occ.add(ins)
             used_ins[c].add(ins)
-            done = True
-            break
-        # (2) bounded BFS fallback for congested cases: route start -> a port anchor,
-        # free to detour through the open NORTH region above the bodies.
-        if not done:
-            bx_max = max(b.x + b.size[0] for b in bodies.values())
-            by_min = min(b.y for b in bodies.values())
-            bounds = (-2, bx_max + 4, by_min - 8, band_bot + 3 * len(row_end) + 6)
-            for anchor, ins, d in cand:
-                occ.discard(anchor)
-                path = _pipe_path(occ, {start}, anchor, bounds, max_gap=UG_MAX_GAP)
-                if path is None:
-                    occ.add(anchor)
-                    continue
-                if _lay_belt_path(layout, occ, path, {"role": "riser", "edge": (p, c)}) is None:
-                    occ.add(anchor)
-                    continue
-                layout.add(PlacedEntity(INSERTER, ins[0], ins[1], direction=d,
-                                        meta={"role": "in", "edge": (p, c)}))
-                occ.add(ins)
-                used_ins[c].add(ins)
-                done = True
-                break
-        if not done:
-            raise LayoutError(f"could not lay riser for lane {p}->{c}")
+        else:
+            occ.add(start)                             # leave lane unrouted (verifier reports it)
 
     _emit_fluids(graph, layout, bodies, occ)
     return layout
