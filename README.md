@@ -79,16 +79,17 @@ circuit -> chips
 `A -> B, C, D` — one belt off A, tapped by an inline inserter per consumer (NO splitters). This is the canonical 'one belt feeds many machines' pattern.
 
 ```text
-# One belt feeding several consumers, via splitters.
+# One belt feeding several consumers, tapped by inline inserters (NO splitters).
 #
 #                         .-> assembler gears   -> out_gears
 #   iron --(one belt)----+--> assembler sticks  -> out_sticks
 #                         '-> output  out_raw
 #
-# `iron -> gears, sticks, out_raw` is a SINGLE output belt off the iron chest; the
-# compiler builds a splitter chain that peels one branch per consumer. Contrast
-# with writing three separate `iron -> ...` lines, which would demand three output
-# inserters on the (1x1) iron chest — impossible. The shared belt needs only one.
+# `iron -> gears, sticks, out_raw` is a SINGLE output belt off the iron chest; each
+# consumer taps it with its own inserter where the belt passes (the canonical "one
+# belt feeds many machines" pattern — no splitter gadget). Contrast with three
+# separate `iron -> ...` lines, which would demand three output inserters on the
+# (1x1) iron chest — impossible. The shared belt needs only one.
 
 input     iron    : iron-plate
 assembler gears   : iron-gear-wheel
@@ -109,15 +110,15 @@ sticks -> out_sticks
 `A, B -> C` — each source keeps its own belt and both tap C directly (a multi-tap merge, no splitter gadget).
 
 ```text
-# Merge: two sources onto ONE belt, via a splitter.
+# Merge: two sources into one machine, each tapping it directly (NO splitter).
 #
 #   iron_a --.
-#            +--(one merged belt)--> assembler gears -> out
+#            +--> assembler gears -> out
 #   iron_b --'
 #
-# `iron_a, iron_b -> gears` is the mirror of fan-out: each source gets its own
-# output inserter, a splitter combines both onto a single belt, and `gears` is fed
-# by just ONE input inserter. (A splitter merges as well as it splits.)
+# `iron_a, iron_b -> gears` is the mirror of fan-out: each source keeps its own
+# belt and taps `gears` with its own input inserter (on a distinct face) — a
+# multi-tap merge, no splitter/merge gadget.
 
 input     iron_a : iron-plate
 input     iron_b : iron-plate
@@ -310,12 +311,13 @@ gears -> out
 - **Nodes:** `input` / `output` chests, `assembler`, `furnace` (smelting), `chemical`
   plant, and `fluid` (an infinite fluid source).
 - **Item lanes** with `->`:  `A -> B -> C` chains · `A -> B, C` fans one belt out to many
-  (splitter bus) · `A, B -> C` merges many onto one belt.
+  (each consumer taps it with an inline inserter — no splitters) · `A, B -> C` merges by
+  having each source tap the machine directly.
 - **Fluid lanes** with `~>`:  carried on **pipes**, into chemical plants / fluid-recipe
   assemblers / tanks.
 
-You only ever write nodes and lanes — inserters, belt paths, splitters, underground
-belts, and pipes are all figured out for you.
+You only ever write nodes and lanes — inserters, belt paths, underground belts, and pipes
+are all figured out for you.
 
 ## Try it
 
@@ -380,12 +382,14 @@ docs/                the committed report + gallery images (also served on GitHu
 ## What this POC shows (and where it strains)
 
 It works end-to-end: a high-level graph becomes a real, verified, buildable layout — items
-on belts and fluids on pipes, with undergrounds, splitter fan-out/merge, furnaces, and
-chemical plants. `STATUS.md` has the current numbers and the exact failing cases.
+on belts and fluids on pipes, with undergrounds, inline-tap fan-out/merge (no splitters),
+furnaces, and chemical plants. The generator is the **v2 lane fabric**: four deterministic
+passes (layer → order → place → emit), no search or rip-up, so every case compiles
+instantly and can't give up. `STATUS.md` has the current numbers and the exact failing cases.
 
-The honest edges: the router is a pure-Python A\* with rip-up/retry, so very large or
-densely-connected graphs can be slow or run out of retry budget (the open work is a tidier
-"bus" fan-out manifold and a faster router); and the verifier checks *connectivity*, not
-throughput — that an item *can* reach B, not the rate, nor that the *right* item rides each
-belt. Those are natural next steps, and the architecture keeps the generator and the
-verifier cleanly separated so each can grow on its own.
+The honest edges: the deterministic passes route most graphs cleanly, but the dense tail —
+multi-fluid oil/chem chains, very high fan-in, congested reconvergence — isn't fully routed
+yet (it needs fluid-aware placement + collector merges; tracked in `STATUS.md`). And the
+verifier checks *connectivity*, not throughput — that an item *can* reach B, not the rate.
+The architecture keeps the generator and the verifier cleanly separated so each can grow on
+its own — the generator is swappable; the verifier is the oracle.

@@ -1,13 +1,14 @@
-# One belt feeding several consumers, via splitters.
+# One belt feeding several consumers, tapped by inline inserters (NO splitters).
 #
 #                         .-> assembler gears   -> out_gears
 #   iron --(one belt)----+--> assembler sticks  -> out_sticks
 #                         '-> output  out_raw
 #
-# `iron -> gears, sticks, out_raw` is a SINGLE output belt off the iron chest; the
-# compiler builds a splitter chain that peels one branch per consumer. Contrast
-# with writing three separate `iron -> ...` lines, which would demand three output
-# inserters on the (1x1) iron chest — impossible. The shared belt needs only one.
+# `iron -> gears, sticks, out_raw` is a SINGLE output belt off the iron chest; each
+# consumer taps it with its own inserter where the belt passes (the canonical "one
+# belt feeds many machines" pattern — no splitter gadget). Contrast with three
+# separate `iron -> ...` lines, which would demand three output inserters on the
+# (1x1) iron chest — impossible. The shared belt needs only one.
 
 input     iron    : iron-plate
 assembler gears   : iron-gear-wheel
