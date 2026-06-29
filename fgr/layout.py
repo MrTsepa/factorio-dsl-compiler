@@ -639,7 +639,7 @@ def compile_graph(graph: Graph) -> Layout:
                 if path is None:
                     occ.add(anchor)
                     continue
-                if _lay_polyline(layout, occ, _waypoints(path), {"role": "riser", "edge": (p, c)}) is None:
+                if _lay_belt_path(layout, occ, path, {"role": "riser", "edge": (p, c)}) is None:
                     occ.add(anchor)
                     continue
                 layout.add(PlacedEntity(INSERTER, ins[0], ins[1], direction=d,
@@ -690,9 +690,9 @@ def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP):
             if nb not in prev and free(nb):
                 prev[nb] = (cur, d, "step")
                 q.append(nb)
-            # tunnel over an occupied run, but ONLY when arriving straight (so the entrance
-            # `cur` is not a corner -- an underground end can't turn).
-            elif nb not in prev and nb in occ and nb != goal and came_dir == d:
+            # tunnel over an occupied run, but ONLY when arriving straight AND not right
+            # after another tunnel (so each tile has a single role: entrance OR exit).
+            elif nb not in prev and nb in occ and nb != goal and came_dir == d and came_via != "jump":
                 m = 2
                 while m <= max_gap:
                     ex = (cur[0] + dx * m, cur[1] + dy * m)
@@ -703,6 +703,42 @@ def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP):
                         break
                     m += 1
     return None
+
+
+def _lay_belt_path(layout, occ, path, meta):
+    """Lay a BFS tile path (from _pipe_path) DIRECTLY as belts + underground-belts. Adjacent
+    tiles -> belt; a gap (a tunnel jump) -> underground entrance/exit. The BFS guarantees a
+    tunnel is entered/left straight and never abuts another tunnel, so every tile has one
+    role. Returns the set of tiles used, or None if an endpoint is occupied."""
+    if path[0] in occ or path[-1] in occ:
+        return None
+    n = len(path)
+    dirs = [delta_to_dir(_sign(path[i + 1][0] - path[i][0]),
+                         _sign(path[i + 1][1] - path[i][1])) for i in range(n - 1)]
+    placed, used = [], set()
+    for i, t in enumerate(path):
+        d_out = dirs[i] if i < n - 1 else dirs[-1]
+        out_gap = i < n - 1 and (abs(path[i + 1][0] - t[0]) + abs(path[i + 1][1] - t[1])) > 1
+        in_gap = i > 0 and (abs(t[0] - path[i - 1][0]) + abs(t[1] - path[i - 1][1])) > 1
+        if out_gap:
+            placed.append(("ug_in", t, d_out)); used.add(t)
+            a = t
+            while a != path[i + 1]:                    # buried tiles
+                a = (a[0] + DIR_DELTA[d_out][0], a[1] + DIR_DELTA[d_out][1])
+                if a != path[i + 1]:
+                    used.add(a)
+        elif in_gap:
+            placed.append(("ug_out", t, dirs[i - 1])); used.add(t)
+        else:
+            placed.append(("belt", t, d_out)); used.add(t)
+    for kind, t, d in placed:
+        if kind == "belt":
+            layout.add(PlacedEntity(BELT, t[0], t[1], direction=d, meta=meta))
+        else:
+            layout.add(PlacedEntity(UNDERGROUND, t[0], t[1], direction=d,
+                                    ug_type="input" if kind == "ug_in" else "output", meta=meta))
+    occ |= used
+    return used
 
 
 def _waypoints(path):
