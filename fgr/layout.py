@@ -833,30 +833,38 @@ def _emit_fluids(graph, layout, bodies, occ):
             occ.add(tile)
 
     placed_surface: dict[str, set] = {}                       # src -> its surface pipe tiles
+    anchors: dict[str, tuple] = {}                            # src -> (source_anchor, [cons])
+    order = [n for n in graph.nodes if n in by_src]            # deterministic
 
-    for src in [n for n in graph.nodes if n in by_src]:        # deterministic order
-        # ISOLATION: keep this network >=1 tile from every OTHER network's surface pipes,
-        # so different fluids never weld (the verifier merges 4-adjacent surface pipes).
+    # PHASE 1: attach EVERY fluid box (place its box pipe) before routing ANY link, so a link
+    # can never land 4-adjacent to another network's box pipe and weld it (the MIX-weld bug).
+    for src in order:
+        before = len(layout.entities)
+        sb = pick_box(src, "output")
+        sa = _box_attach(layout, occ, sb[0], sb[1], src) if sb else None
+        cons = []
+        if sa is not None:
+            for d in by_src[src]:
+                db = pick_box(d, "input")
+                cons.append(_box_attach(layout, occ, db[0], db[1], src) if db else None)
+        anchors[src] = (sa, cons)
+        placed_surface[src] = {(e.x, e.y) for e in layout.entities[before:]
+                               if e.proto in (PIPE, PIPE_TO_GROUND)}
+
+    # PHASE 2: link each network's anchors with mostly-underground pipe runs, kept >=1 tile
+    # from every OTHER network's pipes (box pipes + already-routed links) so fluids never weld.
+    for src in order:
+        sa, cons = anchors[src]
+        if sa is None:
+            continue
         avoid = {(t[0] + dx, t[1] + dy)
                  for o, tiles in placed_surface.items() if o != src
                  for t in tiles for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))}
         avoid -= occ
         occ |= avoid
         before = len(layout.entities)
-        sb = pick_box(src, "output")
-        if sb is None:
-            occ -= avoid
-            continue
-        sa = _box_attach(layout, occ, sb[0], sb[1], src)
-        if sa is None:
-            occ -= avoid
-            continue
         net = {sa}
-        for d in by_src[src]:
-            db = pick_box(d, "input")
-            if db is None:
-                continue
-            da = _box_attach(layout, occ, db[0], db[1], src)
+        for da in cons:
             if da is None:
                 continue
             occ.discard(da)
@@ -864,16 +872,12 @@ def _emit_fluids(graph, layout, bodies, occ):
             occ.add(da)
             if path is None:
                 continue
-            # lay only the interior (endpoints are already the anchor pipes); they connect
-            # 4-adjacently to path[1] / path[-2].
-            interior = path[1:-1]
+            interior = path[1:-1]                               # endpoints are the anchor pipes
             ok = True
             if interior:
                 ok = _lay_belt_path(layout, occ, interior, {"role": "pipe", "net": src}, pipe=True) is not None
             if ok:
                 net |= set(path)
-        # record this network's surface pipe tiles; release the temporary isolation block
-        # (none of the avoid tiles became pipes -- they were blocked, not used).
-        placed_surface[src] = {(e.x, e.y) for e in layout.entities[before:]
-                               if e.proto in (PIPE, PIPE_TO_GROUND)}
+        placed_surface[src] |= {(e.x, e.y) for e in layout.entities[before:]
+                                if e.proto in (PIPE, PIPE_TO_GROUND)}
         occ -= avoid
