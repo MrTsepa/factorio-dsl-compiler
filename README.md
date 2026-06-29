@@ -24,7 +24,7 @@ they always match the source.
 
 ### `gears`
 
-The hello-world: an input chest of iron plates → an assembler making gears → an output chest.
+The hello-world: an input chest of iron plates → an assembler making gears → an output chest, laid out as one tight aligned line.
 
 ```text
 # The "hello world" factory: turn iron plates into gears, ship the gears out.
@@ -47,7 +47,7 @@ gears -> out
 
 ### `circuits`
 
-Two ingredients into one assembler — the compiler tunnels the iron lane *under* the cable lane with an underground belt.
+Two ingredients into one assembler — copper→cable→circuit on the spine, with the iron lane routed to the circuit's second input.
 
 ```text
 # A two-stage factory with a multi-input assembler.
@@ -76,7 +76,7 @@ circuit -> chips
 
 ### `bus`
 
-`A -> B, C, D` is one belt off A that a splitter bus fans out to several consumers.
+`A -> B, C, D` — one belt off A, tapped by an inline inserter per consumer (NO splitters). This is the canonical 'one belt feeds many machines' pattern.
 
 ```text
 # One belt feeding several consumers, via splitters.
@@ -106,7 +106,7 @@ sticks -> out_sticks
 
 ### `merge`
 
-`A, B -> C` merges several sources onto a single belt (a splitter combines them).
+`A, B -> C` — each source keeps its own belt and both tap C directly (a multi-tap merge, no splitter gadget).
 
 ```text
 # Merge: two sources onto ONE belt, via a splitter.
@@ -130,37 +130,9 @@ gears -> out
 
 ![merge](docs/img/merge.png)
 
-### `sulfuric_acid`
-
-Fluids! Water flows through **pipes** into a chemical plant; sulfuric acid comes out to a storage tank. Items ride belts, fluids ride pipes — each attaching at the machine's real fluid-box tiles.
-
-![sulfuric_acid](docs/img/sulfuric_acid.png)
-
-<details><summary>show the DSL</summary>
-
-```text
-# Sulfuric acid: a chemical-plant takes water (FLUID, ~>) + iron + sulfur (items).
-# Steel is smelted in a FURNACE. Items go to a chest, acid is piped to a tank.
-input iron : iron-plate
-input sulfur : sulfur
-furnace steel : steel-plate
-fluid water : water
-chemical acid : sulfuric-acid
-output steel_out
-output acid_tank
-iron -> steel
-iron -> acid
-sulfur -> acid
-water ~> acid
-steel -> steel_out
-acid ~> acid_tank
-```
-
-</details>
-
 ### `processing_unit`
 
-Reconvergent electronics: copper → cable → circuits → processing unit, with sulfuric acid piped in.
+Reconvergent electronics (copper→cable→green→red→blue with skip-edges) **plus** sulfuric acid piped in — fluids tunnel under the belt field into the chemical/assembler fluid boxes.
 
 ![processing_unit](docs/img/processing_unit.png)
 
@@ -190,43 +162,132 @@ blue -> chips
 
 </details>
 
-### `flying_robot_frame`
+### `deepchain_4`
 
-A deep multi-step build — a furnace, oil/chemical fluids (pipes + a tank), and many reconverging item belts.
+A deep multi-stage build — clean repeating machine cells along the spine.
 
-![flying_robot_frame](docs/img/flying_robot_frame.png)
+![deepchain_4](docs/img/deepchain_4.png)
 
 <details><summary>show the DSL</summary>
 
 ```text
-# Deep multi-step with smelting (furnace) and fluids (pipes): flying-robot-frame.
+# deepchain_4: the depth stress test. One very long spine (depth 14) climbing the
+# iron tech progression from ore all the way to production science, with a few
+# long cross-column lanes from an electronics branch feeding deep spine columns.
+
+input     iron_ore   : iron-ore
+input     copper     : copper-plate
+input     stone      : stone
+fluid     lube       : lubricant
+
+furnace   iron_plate : iron-plate
+assembler gear       : iron-gear-wheel
+assembler pipe_part  : pipe
+assembler engine     : engine-unit
+assembler  eengine    : electric-engine-unit
+assembler frame      : flying-robot-frame
+assembler stick      : iron-stick
+assembler rail       : rail
+assembler efurnace   : electric-furnace
+assembler prod_mod   : productivity-module
+assembler prod_mod2  : productivity-module-2
+assembler prod_sci   : production-science-pack
+output    out
+
+# electronics branch (the long cross-column lanes)
+assembler cable      : copper-cable
+assembler green      : electronic-circuit
+assembler red        : advanced-circuit
+
+# --- the deep spine (depth 14) ---
+iron_ore -> iron_plate -> gear -> pipe_part -> engine -> eengine -> frame -> stick -> rail -> efurnace -> prod_mod -> prod_mod2 -> prod_sci -> out
+
+# --- electric engine needs lubricant (fluid) ---
+lube ~> eengine
+
+# --- electronics branch + long lanes into deep spine columns ---
+copper -> cable -> green -> red
+red -> efurnace
+green -> prod_mod
+red -> prod_mod
+red -> prod_mod2
+
+# --- rail also needs stone ---
+stone -> rail
+```
+
+</details>
+
+### `science_3`
+
+A larger factory with furnaces and fluids, fully verified.
+
+![science_3](docs/img/science_3.png)
+
+<details><summary>show the DSL</summary>
+
+```text
+# science_3: red + green + military science mall, furnace-heavy (steel + brick),
+# using a merge (coal + iron -> grenade). No fluids; all items on belts.
+#   red      = automation-science-pack = copper-plate + iron-gear-wheel
+#   green    = logistic-science-pack   = inserter + transport-belt
+#   military = military-science-pack    = piercing-rounds-magazine + grenade + stone-wall
+
 input iron : iron-plate
 input copper : copper-plate
-fluid lube : lubricant
-fluid acid : sulfuric-acid
+input coal : coal
+input stone : stone
+
 furnace steel : steel-plate
+furnace brick : stone-brick
+
 assembler gear : iron-gear-wheel
-assembler pipe_part : pipe
 assembler cable : copper-cable
-assembler green : electronic-circuit
-assembler engine : engine-unit
-assembler eengine : electric-engine-unit   # crafting-with-fluid (lubricant) -> assembler, not chemical
-chemical battery : battery                  # battery is a chemistry recipe -> chemical plant
-assembler frame : flying-robot-frame
-output frame_out
-iron -> steel, gear, pipe_part, green, battery
-copper -> cable, battery
-cable -> green
-gear -> engine
-pipe_part -> engine
-steel -> engine, frame
-engine -> eengine
-green -> eengine, frame
-lube ~> eengine
-acid ~> battery
-eengine -> frame
-battery -> frame
-frame -> frame_out
+assembler green_chip : electronic-circuit
+assembler arm : inserter
+assembler belt : transport-belt
+assembler firearm_mag : firearm-magazine
+assembler pierce : piercing-rounds-magazine
+assembler grenade : grenade
+assembler wall : stone-wall
+assembler redsci : automation-science-pack
+assembler greensci : logistic-science-pack
+assembler milsci : military-science-pack
+
+output red_out
+output green_out
+output mil_out
+
+# raw distribution
+iron -> gear, green_chip, arm, belt, steel, firearm_mag
+copper -> cable, redsci, pierce
+stone -> brick
+
+# merge: two belts feed the grenade line
+coal, iron -> grenade
+
+# smelting
+steel -> pierce
+brick -> wall
+
+# circuits / movement
+cable -> green_chip
+green_chip -> arm
+gear -> arm, belt, redsci
+
+# ammo line
+firearm_mag -> pierce
+
+# science assembly
+pierce -> milsci
+grenade -> milsci
+wall -> milsci
+arm -> greensci
+belt -> greensci
+
+redsci -> red_out
+greensci -> green_out
+milsci -> mil_out
 ```
 
 </details>

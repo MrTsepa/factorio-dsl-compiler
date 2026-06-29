@@ -23,24 +23,24 @@ from fgr.blueprint import to_blueprint_string               # noqa: E402
 # (path, one-line blurb, inline_dsl?)  -- simple first (DSL inline), then bigger (DSL folded).
 GALLERY = [
     ("examples/basic/gears.fgr",
-     "The hello-world: an input chest of iron plates → an assembler making gears → an output chest.", True),
+     "The hello-world: an input chest of iron plates → an assembler making gears → an output chest, "
+     "laid out as one tight aligned line.", True),
     ("examples/basic/circuits.fgr",
-     "Two ingredients into one assembler — the compiler tunnels the iron lane *under* the cable "
-     "lane with an underground belt.", True),
+     "Two ingredients into one assembler — copper→cable→circuit on the spine, with the iron lane "
+     "routed to the circuit's second input.", True),
     ("examples/basic/bus.fgr",
-     "`A -> B, C, D` is one belt off A that a splitter bus fans out to several consumers.", True),
+     "`A -> B, C, D` — one belt off A, tapped by an inline inserter per consumer (NO splitters). "
+     "This is the canonical 'one belt feeds many machines' pattern.", True),
     ("examples/basic/merge.fgr",
-     "`A, B -> C` merges several sources onto a single belt (a splitter combines them).", True),
-    ("examples/complex/sulfuric_acid.fgr",
-     "Fluids! Water flows through **pipes** into a chemical plant; sulfuric acid comes out to a "
-     "storage tank. Items ride belts, fluids ride pipes — each attaching at the machine's real "
-     "fluid-box tiles.", False),
+     "`A, B -> C` — each source keeps its own belt and both tap C directly (a multi-tap merge, "
+     "no splitter gadget).", True),
     ("examples/complex/processing_unit.fgr",
-     "Reconvergent electronics: copper → cable → circuits → processing unit, with sulfuric acid "
-     "piped in.", False),
-    ("examples/complex/flying_robot_frame.fgr",
-     "A deep multi-step build — a furnace, oil/chemical fluids (pipes + a tank), and many "
-     "reconverging item belts.", False),
+     "Reconvergent electronics (copper→cable→green→red→blue with skip-edges) **plus** sulfuric "
+     "acid piped in — fluids tunnel under the belt field into the chemical/assembler fluid boxes.", False),
+    ("examples/stress/deepchain_4.fgr",
+     "A deep multi-stage build — clean repeating machine cells along the spine.", False),
+    ("examples/stress/science_3.fgr",
+     "A larger factory with furnaces and fluids, fully verified.", False),
 ]
 
 
