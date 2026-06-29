@@ -112,7 +112,7 @@ def verify(graph: Graph, layout: Layout) -> Report:
                 carrier_at[t] = cid
                 trans_at[t] = e
 
-    edges_out = _flow_edges(layout, carrier_at, trans_at, report)
+    edges_out = _flow_edges(layout, carrier_at, trans_at, bodies, report)
     report.lanes_found = _direct_lanes(graph, bodies, body_tiles, edges_out)
     _compare_to_spec(graph, report)
     _check_fluids(graph, layout, bodies, report)
@@ -163,7 +163,7 @@ def _correspondence(graph: Graph, layout: Layout, report: Report) -> dict[str, P
     return bodies
 
 
-def _flow_edges(layout: Layout, carrier_at: dict, trans_at: dict, report: Report) -> dict:
+def _flow_edges(layout: Layout, carrier_at: dict, trans_at: dict, bodies: dict, report: Report) -> dict:
     """Directed carrier->carrier edges from inserters, belts, splitters, undergrounds."""
     edges: dict[object, set] = {}
     dangling = []
@@ -186,13 +186,18 @@ def _flow_edges(layout: Layout, carrier_at: dict, trans_at: dict, report: Report
         if accepts(target_tile, d):
             edges.setdefault(src_id, set()).add(carrier_at[target_tile])
 
+    def item_carrier(cid) -> bool:
+        # an inserter moves ITEMS; a fluid-only body (storage-tank, infinity-pipe) can neither
+        # yield nor accept items, so an inserter touching one is non-functional in-game.
+        return not (cid is not None and cid[0] == "body" and bodies[cid[1]].proto in (TANK, FLUID_SOURCE))
+
     for e in layout.entities:
         if e.proto == INSERTER:
             dx, dy = DIR_DELTA[e.direction]
             # an inserter's `direction` points at its PICKUP; it drops on the far side
             pick = carrier_at.get((e.x + dx, e.y + dy))
             drop = carrier_at.get((e.x - dx, e.y - dy))
-            if pick is None or drop is None:
+            if pick is None or drop is None or not item_carrier(pick) or not item_carrier(drop):
                 dangling.append((e.x, e.y))
                 continue
             edges.setdefault(pick, set()).add(drop)
