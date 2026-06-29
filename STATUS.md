@@ -12,12 +12,12 @@ unchanged — the verifier remains the independent oracle). Regenerate the numbe
 
 | Suite | Result |
 |-------|--------|
-| **pytest** | **76 passed, 35 xfailed, 1 skipped** (green) |
+| **pytest** | **77 passed, 34 xfailed, 1 skipped** (green) |
 | **All 49 examples compile** (no crashes) | **49 / 49** |
-| **Examples that fully verify** | **20 / 49** |
+| **Examples that fully verify** | **22 / 49** |
 | &nbsp;&nbsp;• basic | 6 / 6 |
 | &nbsp;&nbsp;• complex (hand-authored) | 3 / 6 |
-| &nbsp;&nbsp;• stress (generated DAGs) | 11 / 37 |
+| &nbsp;&nbsp;• stress (generated DAGs) | 13 / 37 |
 
 A "pass" means the layout was *independently graded* by `fgr/verify.py` as physically
 realising the spec: every declared belt/pipe lane connects, nothing spurious, no overlaps,
@@ -50,6 +50,15 @@ verifier previously accepted any pipe/p2g on a box (false-pass, caught on an FBS
 Now a box connects only via a **plain pipe** or a **p2g whose mouth faces the machine**, in
 both the verifier and the generator (which tunnels into boxes from under the belt field).
 Plus fluid-network **isolation** (1-tile keep-out) so two fluids can't weld.
+
+A parallel **adversarial audit** of the verifier then closed three more false-passes in the
+same family (so a "pass" is trustworthy): a pipe-to-ground now surface-connects only toward
+its open mouth (not all four sides); an underground-belt's pairing scan stops at the first
+*same-axis* underground (an opposed same-tier one interferes in-game); and a new **"no
+undeclared fluid lanes"** check (the fluid analogue of the item-side guarantee) catches a
+network that joins one machine's produced fluid to another's input. Assemblers are also
+modelled correctly (fluid boxes only when the recipe uses fluid), and the generator blocks
+unused fluid-box tiles so a passing pipe can't weld a phantom connection.
 
 ## Where it still fails (the tracked tail)
 
