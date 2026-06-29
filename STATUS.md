@@ -56,9 +56,25 @@ same family (so a "pass" is trustworthy): a pipe-to-ground now surface-connects 
 its open mouth (not all four sides); an underground-belt's pairing scan stops at the first
 *same-axis* underground (an opposed same-tier one interferes in-game); and a new **"no
 undeclared fluid lanes"** check (the fluid analogue of the item-side guarantee) catches a
-network that joins one machine's produced fluid to another's input. Assemblers are also
-modelled correctly (fluid boxes only when the recipe uses fluid), and the generator blocks
-unused fluid-box tiles so a passing pipe can't weld a phantom connection.
+network that joins one machine's produced fluid to another's input. A later audit pass also
+hardened inserter **insertability** (an inserter touching a fluid-only body — tank / infinity-
+pipe — is rejected, since it can't move items there). Assemblers are also modelled correctly
+(fluid boxes only when the recipe uses fluid), and the generator blocks unused fluid-box
+tiles so a passing pipe can't weld a phantom connection.
+
+### What a "pass" does and doesn't cover
+
+The oracle grades **physical material-flow topology**: placement (no overlaps), node↔machine
+correspondence, every declared belt/pipe lane connected, no spurious lanes, fluids isolated
+and attached at real boxes. Out of its scope (by design, tracked):
+
+- **Power** — substations + an electric-energy-interface are specified in `docs/V2_DESIGN.md`
+  but not yet placed; in-game the machines would need power. (Constants exist; the overlay +
+  a `_check_power` are the next feature.)
+- **Recipe↔machine category** (e.g. a chemistry recipe on an assembler) — checked by
+  `fgr/fbsr_validation.py` against real Factorio data, deliberately kept out of the pure
+  oracle (which holds no hard-coded recipe table).
+- **Throughput** — connectivity only: that an item *can* reach a machine, not the rate.
 
 ## Where it still fails (the tracked tail)
 
