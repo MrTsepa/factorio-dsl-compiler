@@ -245,28 +245,35 @@ def _assign_rows(graph, col):
         cols[c].sort(key=lambda n: order[n])
 
     fluid_sinks = {e.dst for e in graph.edges if e.fluid}
+    indeg: dict[str, int] = {}
+    for e in graph.edges:
+        if not e.fluid:
+            indeg[e.dst] = indeg.get(e.dst, 0) + 1
+
     def half(n):                                   # half-height (clearance each side)
-        h = SIZE[_node_proto(graph, n, fluid_sinks)][1]
-        return h // 2
+        return SIZE[_node_proto(graph, n, fluid_sinks)][1] // 2
+
+    def pad(n):                                     # extra clearance for crowded consumers:
+        return max(1, (indeg.get(n, 0) + 1) // 2)   # ~1 row of slack per 2 converging inputs
 
     cr: dict[str, int] = {}
     for c in sorted(cols):
         used: list[tuple[int, int]] = []           # occupied [lo,hi] center-spans this column
-        def free(center, hh):
-            lo, hi = center - hh - 1, center + hh + 1   # +1 row of clearance
+        def free(center, hh, pd):
+            lo, hi = center - hh - pd, center + hh + pd
             return all(hi < a or lo > b for a, b in used)
         for n in cols[c]:
-            hh = half(n)
+            hh, pd = half(n), pad(n)
             pp = _primary_pred(graph, n, col)
             want = cr[pp] if pp in cr else 0
             r = want
             for off in range(0, 400):              # search outward from desired row
-                if free(want + off, hh):
+                if free(want + off, hh, pd):
                     r = want + off; break
-                if free(want - off, hh):
+                if free(want - off, hh, pd):
                     r = want - off; break
             cr[n] = r
-            used.append((r - hh - 1, r + hh + 1))
+            used.append((r - hh - pd, r + hh + pd))
     return cr, order
 
 
@@ -775,14 +782,15 @@ def _box_attach(layout, occ, box, mdir, net):
     (e.g. a belt), instead drop a pipe-to-ground ON the box facing the machine and tunnel
     straight OUT under whatever, returning the exit tile. Returns the anchor tile routing
     should connect to, or None."""
-    away = OPPOSITE[mdir]
-    dx, dy = DIR_DELTA[away]
     occ.discard(box)
-    if (box[0] + dx, box[1] + dy) not in occ:                  # route side open -> plain pipe
+    if any((box[0] + DIR_DELTA[d][0], box[1] + DIR_DELTA[d][1]) not in occ
+           for d in (EAST, WEST, NORTH, SOUTH)):              # ANY free neighbour -> plain pipe
         layout.add(PlacedEntity(PIPE, box[0], box[1], meta={"role": "pipe", "net": net}))
-        occ.add(box)
+        occ.add(box)                                          # routing reaches it via that side
         return box
-    for m in range(2, PIPE_UG_GAP + 1):                        # tunnel out under the belts
+    away = OPPOSITE[mdir]                                     # fully boxed in -> p2g into the box
+    dx, dy = DIR_DELTA[away]                                  # facing the machine, tunnel out
+    for m in range(2, PIPE_UG_GAP + 1):
         ex = (box[0] + dx * m, box[1] + dy * m)
         if ex not in occ:
             layout.add(PlacedEntity(PIPE_TO_GROUND, box[0], box[1], direction=mdir,
