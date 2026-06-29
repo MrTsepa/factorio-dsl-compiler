@@ -1,12 +1,13 @@
 """Render a blueprint string to a PNG via Factorio-FBSR (game-accurate sprites).
 
 Rendering is **optional** — the POC's correctness comes from the verifier, not the
-picture. It shells out to an FBSR CLI wrapper that supports
-``<wrapper> bot-render <blueprint-string> -o=<png> -full`` and is backed by a warm
-render service. Build FBSR from https://github.com/demodude4u/Factorio-FBSR, then
-point this module at your wrapper script:
+picture. It shells out to ``scripts/fbsr.sh`` (shipped here), which drives an EXTERNAL
+Factorio-FBSR build you provide. Build FBSR from https://github.com/demodude4u/Factorio-FBSR
+and point the wrapper at it (it reads ``FBSR_HOME`` / ``FGR_FBSR_HOME``):
 
-    export FGR_FBSR_SH=/path/to/your/fbsr.sh
+    export FBSR_HOME=/path/to/Factorio-FBSR/FactorioBlueprintStringRenderer
+
+Override the wrapper itself with ``FGR_FBSR_SH`` if you have your own.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import subprocess
 from pathlib import Path
 
 _UPSTREAM = "https://github.com/demodude4u/Factorio-FBSR"
+_WRAPPER = Path(__file__).resolve().parents[1] / "scripts" / "fbsr.sh"
 
 
 class RenderError(RuntimeError):
@@ -23,8 +25,9 @@ class RenderError(RuntimeError):
 
 
 def fbsr_script() -> Path:
-    """The FBSR CLI wrapper. Set ``FGR_FBSR_SH`` to its path."""
-    return Path(os.environ.get("FGR_FBSR_SH", "fbsr.sh"))
+    """The FBSR CLI wrapper (defaults to this repo's ``scripts/fbsr.sh``; override
+    with ``FGR_FBSR_SH``)."""
+    return Path(os.environ.get("FGR_FBSR_SH", str(_WRAPPER)))
 
 
 def render_blueprint_string(bp: str, out_png: str | Path, timeout: int = 120) -> Path:
@@ -32,10 +35,10 @@ def render_blueprint_string(bp: str, out_png: str | Path, timeout: int = 120) ->
     script = fbsr_script()
     if not script.exists():
         raise RenderError(
-            f"FBSR wrapper not found at {script!s}. Rendering is optional; to enable it, "
-            f"build FBSR ({_UPSTREAM}) and set FGR_FBSR_SH to your render wrapper script.")
-    # Resolve to an absolute path: the FBSR service writes relative to *its* own
-    # working directory, not ours, so a bare "out.png" would land in the wrong place.
+            f"FBSR wrapper not found at {script!s}. Rendering is optional; build FBSR "
+            f"({_UPSTREAM}) and set FBSR_HOME, or point FGR_FBSR_SH at your own wrapper.")
+    # Resolve to an absolute path: FBSR writes relative to *its* own working directory,
+    # not ours, so a bare "out.png" would land in the wrong place.
     out = Path(out_png).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
@@ -43,6 +46,6 @@ def render_blueprint_string(bp: str, out_png: str | Path, timeout: int = 120) ->
         capture_output=True, text=True, timeout=timeout)
     if proc.returncode != 0 or not out.exists() or '"success": true' not in proc.stdout:
         raise RenderError(
-            "FBSR render failed — is the render service running?\n"
+            f"FBSR render failed (is FBSR built and FBSR_HOME set? see {script.name}).\n"
             f"stdout: {proc.stdout.strip()[-500:]}\nstderr: {proc.stderr.strip()[-500:]}")
     return out

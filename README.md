@@ -267,14 +267,18 @@ uv venv --python 3.10 .venv && uv pip install pytest        # one-time
 
 Rendering a PNG is optional — the gallery images and report in this repo are pre-rendered,
 so you don't need a renderer just to browse them, and correctness comes from the verifier,
-not the picture. `fgr` ships no renderer; it simply shells out to a [Factorio-FBSR]
-(https://github.com/demodude4u/Factorio-FBSR) command line if you point `FGR_FBSR_SH` at
-your own wrapper script (one that runs `bot-render <blueprint> -o=<png>`):
+not the picture. The renderer itself is external: `fgr` ships a thin wrapper
+([`scripts/fbsr.sh`](scripts/fbsr.sh)) that drives a [Factorio-FBSR]
+(https://github.com/demodude4u/Factorio-FBSR) build you provide. Build FBSR, point
+`FBSR_HOME` at it, and pass `-o`:
 
 ```bash
-export FGR_FBSR_SH=/path/to/your/fbsr.sh    # YOUR wrapper around FBSR's CLI (not shipped here)
+export FBSR_HOME=/path/to/Factorio-FBSR/FactorioBlueprintStringRenderer   # your built FBSR
 .venv/bin/python -m fgr compile examples/basic/circuits.fgr -o out/circuits.png
 ```
+
+(Set `FGR_FBSR_SH` to override the wrapper; `FGR_FBSR_HOME` likewise points the model/recipe
+checks at FBSR's data. All of it auto-skips when FBSR isn't installed.)
 
 ## Under the hood
 
