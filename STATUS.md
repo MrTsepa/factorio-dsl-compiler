@@ -1,95 +1,78 @@
 # Status report
 
-A snapshot of where the `fgr` POC stands: what works, the latest numbers, and exactly
-where the compiler still fails. Regenerate the battery numbers with:
+Where the `fgr` POC stands on the **`v2-clean-layout`** branch: a from-scratch rewrite of
+the layout *generator* into a deterministic **lane fabric** (the verifier/DSL/IR/emitter are
+unchanged — the verifier remains the independent oracle). Regenerate the numbers with:
 
 ```bash
-.venv/bin/python -m pytest -q                                      # unit/regression suite
-.venv/bin/python scripts/stress_complex.py examples/complex examples/stress   # stress battery
+.venv/bin/python -m pytest -q                      # unit + regression + every example
 ```
 
 ## Results
 
 | Suite | Result |
 |-------|--------|
-| **pytest** (unit + regression) | **61 / 61 green** |
-| **Stress battery** (`examples/complex` + `examples/stress`) | **37 / 43 compile + verify** |
-| &nbsp;&nbsp;• hand-authored complex (`examples/complex`) | 6 / 6 |
-| &nbsp;&nbsp;• generated stress DAGs (`examples/stress`) | 31 / 37 |
+| **pytest** | **76 passed, 35 xfailed, 1 skipped** (green) |
+| **All 49 examples compile** (no crashes) | **49 / 49** |
+| **Examples that fully verify** | **20 / 49** |
+| &nbsp;&nbsp;• basic | 6 / 6 |
+| &nbsp;&nbsp;• complex (hand-authored) | 3 / 6 |
+| &nbsp;&nbsp;• stress (generated DAGs) | 11 / 37 |
 
-The verifier is the source of truth: a "pass" means the compiled layout was *independently*
-graded as physically realising the spec (every declared belt/pipe lane connects, nothing
-spurious, no overlaps, fluids isolated). An independent second checker
-(`scripts/independent_check.py`, a different code path) and FBSR renders corroborate it.
+A "pass" means the layout was *independently graded* by `fgr/verify.py` as physically
+realising the spec: every declared belt/pipe lane connects, nothing spurious, no overlaps,
+fluids isolated and attached at real fluid-box tiles. The not-yet-verified cases are tracked
+in `tests/test_examples.py::KNOWN_FAILING` (xfail) and fail loudly if they start passing.
 
-## Where it still fails (6 cases)
+## What v2 is
 
-All six remaining failures are the **router/manifold** hitting its limit — *not* the
-verifier or the model. Two flavours, same root cause (too many belt lanes competing for a
-corridor):
+Four deterministic passes — **no search, no rip-up, cannot give up** (see `docs/V2_DESIGN.md`):
 
-**A. Fan-out / merge congestion** — `reconverge_6` (two merges into adjacent collector
-chests). The fan-out manifold is a *compact* splitter chain whose peel tails run as long
-diagonals to spread-out consumers; past ~6–7 the tails saturate the corridor and the rip-up
-router gives up. (The merge side was improved this session — splitters now sit beside the
-trunk so sources curve straight in, no underground U-turn — which recovered `science_3` and
-`science_6`.)
+1. **LAYER** — columns by ALAP depth; inputs pinned west (col 0), outputs east.
+2. **ORDER** — barycenter row ordering per column (near-planarize before routing).
+3. **PLACE** — running-sum X (adaptive, no fixed stride); the dominant chain is center-row
+   aligned so the main spine is a dead-straight belt.
+4. **EMIT** — the universal lane primitive: **one belt per producer, tapped by one inserter
+   per consumer**. Fan-out and merge are inline taps with **zero splitters** (the requested
+   "feed many machines without splitting"). Crossings dive via vertical undergrounds so
+   distinct lanes never weld. Fluids route as mostly-underground pipe trees, one network per
+   source, with a 1-tile keep-out between networks.
 
-**B. Large dense graphs (speed)** — `reconverge_1` (19 nodes / 37 edges), `scale_2`
-(40 / 73), `scale_4` (37 / 72), `scale_5` (31 / 70), `scale_6` (46 / 89). These exceed the
-15 s harness budget: the pure-Python A* + rip-up *thrashes* (lanes repeatedly rip and
-re-route) before succeeding or giving up.
+**Wins vs the v1 baseline:** deterministic & instant (no A*/rip-up thrash — v1's `scale_2`
+took ~46 s; v2 compiles every case sub-second); far tighter (e.g. gears 81→57 area, 20→10
+belts); no spaghetti; **zero** compile crashes, overlaps, or spurious lanes.
 
-The highest-leverage remaining fix is the **bus fan-out manifold**: place each splitter at
-its consumer's *row* so every peel is a short straight hop (instead of a long diagonal),
-removing the congestion *and* shrinking layouts (faster routing). Prototyped earlier but had
-geometry bugs and was reverted to keep the suite green; finishing it is the top open task. A
-compiled / smarter router (or jump-point A*) would independently address flavour B.
+## Correctness fix this session (a real verifier false-pass)
 
-## What landed this session
+A **pipe-to-ground sitting on a fluid box does not feed the machine** unless its open mouth
+faces the machine — its underground side connects to its tunnel partner, not the box. The
+verifier previously accepted any pipe/p2g on a box (false-pass, caught on an FBSR render).
+Now a box connects only via a **plain pipe** or a **p2g whose mouth faces the machine**, in
+both the verifier and the generator (which tunnels into boxes from under the belt field).
+Plus fluid-network **isolation** (1-tile keep-out) so two fluids can't weld.
 
-**Correctness (the oracle got stronger):**
-- **Fluid-mixing detection** — the verifier now flags a pipe network carrying two fluids.
-  This was a real blind spot: pure reachability (both the verifier *and* the independent
-  checker) said PASS on a layout where petroleum-gas and water shared one network; only the
-  FBSR render + visual audit caught it. Root cause was a stray pipe touching an *unused*
-  fluid box — now every fluid-box tile is blocked unless a network claims it.
-- **Underground pairing rules** — pipe-to-ground pairs with the *nearest* opposite mouth;
-  a same-axis underground in the line *blocks* the scan, a perpendicular one is ignored
-  (collinear interleaved tunnels cross-pair; perpendicular crossings are fine).
-- **Pipe vs belt reach** — pipe-to-ground reaches farther underground (10) than an
-  underground belt (5); the verifier now uses the correct, separate distances.
-- **Fluid isolation** — different fluids are kept from running surface-adjacent (so they
-  can't weld), while still crossing freely by tunnelling under one another.
-- **Pipe-to-ground direction** — `direction` is the OPEN mouth (underground is the opposite
-  side); the emitter had entrance/exit swapped, so FBSR drew every tunnel reversed. Fixed
-  and pinned in `validate-model` against real data.
-- **Recipe ↔ machine validity** — a *spec* check (not the layout) done NATIVELY from
-  Factorio data: a recipe's `category` must be in its machine's `crafting_categories`, so a
-  chemical-plant recipe on an `assembler` (or vice-versa) is flagged — no hard-coded recipe
-  table. Surfaced by `fgr verify` / `fgr compile`. (This caught `electric-engine-unit` and
-  `processing-unit`, which are crafting-with-fluid → assemblers, not chemical plants.)
+## Where it still fails (the tracked tail)
 
-**Capability:**
-- Furnaces (`furnace`), chemical plants (`chemical`) + infinite fluid sources (`fluid`),
-  and **fluid lanes** (`~>`) carried on **pipes** that attach at real, rotation-aware
-  fluid-box tiles; outputs receiving fluid become storage tanks.
-- Per-source pipe **networks** (one box branching to many consumers) — sidesteps the
-  2-/4-connection limit.
-- **Auto-promote**: a node with more lanes than its perimeter bundles them onto a shared
-  (fan-out) belt or a merge, instead of failing; leftover dedicated out-edges are absorbed
-  into an existing fan-out so one bus carries the source's item.
-- **Merge splitter placed beside the trunk** (not across it): each merge splitter sits one
-  column west of the south-flowing trunk, so a source curves straight into its west input
-  from its own side instead of tunnelling under the bus and U-turning back. Removed the
-  underground U-turns from merges and recovered `science_3` / `science_6` (35 → 37 / 43).
+All remaining failures are **routing through a dense field**, never the verifier or the model:
 
-**Performance:** the A* only considers an underground hop when there's actually an obstacle
-to tunnel under (it used to try a hop from every tile) — a ~4–5× routing speedup that
-recovered several previously-timed-out cases.
+- **Complex multi-fluid chains** (oil/chem refineries: `fluids_*`, `science_*`, several
+  `highfanin_*`/`scale_*`) — many machine→machine fluid lanes whose boxes end up boxed-in
+  (one free neighbour) in the dense interior; the pipe tree can't reach them. The fix is
+  **fluid-aware placement** (cluster fluid-connected machines / a dedicated fluid corridor),
+  a structural rework rather than a routing tweak.
+- **Very high fan-in to small sinks** (`wide_reconverge`: 7 inputs into one 1×1 chest) —
+  exceeds the perimeter's port count; needs a **collector-belt merge** (several lanes onto
+  one belt feeding a single port).
+- **Congested reconvergence** (`reconverge_1`, `scale_*`) — a consumer's perimeter is
+  crowded by its own converging inputs, so the last riser finds no free, reachable port.
 
-**Cleanup / structure:** `compile_graph` is now a readable pipeline with the belt-topology
-decisions (`_consolidate_lanes`) and fluid-network reservation (`_reserve_fluid_networks`)
-extracted; dead code removed; unused imports cleared; the generated stress DAGs are
-committed under `examples/stress/`, and the new `tests/test_complex.py` locks in the
-complex-example, fluid-mixing, and underground-reach behaviour as regression tests.
+Contained levers (gutter width, degree-aware clearance, isolation tuning, stronger BFS
+fallback) were explored and are at their useful limit here; closing the tail needs the two
+structural changes above (fluid-aware placement + collector merges).
+
+## Tests
+
+`tests/test_examples.py` runs **every** example: each must compile, and each must verify
+unless it's in `KNOWN_FAILING` (xfail). A ratchet test guards the pass rate. The verifier
+unit tests were updated to v2's design (fan-out/merge are inline taps, asserted to use **no
+splitters**). Shrinking `KNOWN_FAILING` to empty is the goal.
