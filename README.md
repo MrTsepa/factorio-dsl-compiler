@@ -265,20 +265,16 @@ uv venv --python 3.10 .venv && uv pip install pytest        # one-time
 .venv/bin/python -m pytest -q                               # the test suite
 ```
 
-Rendering a PNG is optional — the gallery images and report in this repo are pre-rendered,
-so you don't need a renderer just to browse them, and correctness comes from the verifier,
-not the picture. The renderer itself is external: `fgr` ships a thin wrapper
-([`scripts/fbsr.sh`](scripts/fbsr.sh)) that drives a [Factorio-FBSR]
-(https://github.com/demodude4u/Factorio-FBSR) build you provide. Build FBSR, point
-`FBSR_HOME` at it, and pass `-o`:
+Rendering a PNG is **optional** — the gallery images and report here are pre-rendered, and
+correctness comes from the verifier, not the picture. Game-accurate rendering uses
+[Factorio-FBSR](https://github.com/demodude4u/Factorio-FBSR), which has to bake sprites from
+*your* Factorio install (Wube's assets aren't redistributable), so it's a bring-your-own
+setup — see **[docs/RENDERING.md](docs/RENDERING.md)**. Once set up:
 
 ```bash
 export FBSR_HOME=/path/to/Factorio-FBSR/FactorioBlueprintStringRenderer   # your built FBSR
 .venv/bin/python -m fgr compile examples/basic/circuits.fgr -o out/circuits.png
 ```
-
-(Set `FGR_FBSR_SH` to override the wrapper; `FGR_FBSR_HOME` likewise points the model/recipe
-checks at FBSR's data. All of it auto-skips when FBSR isn't installed.)
 
 ## Under the hood
 
