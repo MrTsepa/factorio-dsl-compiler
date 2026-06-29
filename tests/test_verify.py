@@ -45,7 +45,7 @@ def test_flipped_inserter_breaks_a_lane():
     # flip the input inserter on `gears` 180° so it no longer feeds the assembler
     # (it was correctly facing WEST = picking from the belt; EAST reverses it)
     for e in lay.entities:
-        if e.proto == INSERTER and e.meta.get("role") == "in-inserter" \
+        if e.proto == INSERTER and e.meta.get("role") == "in" \
                 and e.meta.get("edge") == ("iron", "gears"):
             e.direction = EAST  # now picks from the assembler / drops onto the belt
     report = verify(g, lay)
@@ -69,45 +69,44 @@ def test_no_overlaps_in_examples():
                 seen.add(t)
 
 
-def test_shared_belt_uses_splitters_not_three_inserters():
-    # `iron -> gears, sticks, out_raw` is ONE belt: the iron chest gets a single
-    # output inserter, and the fan-out is done with splitters.
+def test_fanout_uses_inline_taps_not_splitters():
+    # v2: `iron -> gears, sticks, out_raw` is one producer belt tapped by inline inserters,
+    # NO splitters anywhere (the user's "feed many machines without splitting").
     from fgr.layout import SPLITTER
     g, lay = _load("bus.fgr")
-    out_ins = [e for e in lay.entities if e.meta.get("role") == "out-inserter"
-               and e.meta.get("src") == "iron"]
-    assert len(out_ins) == 1, "shared belt should need only one output inserter on iron"
-    assert any(e.proto == SPLITTER for e in lay.entities), "fan-out should place splitters"
+    report = verify(g, lay)
+    assert report.ok, report.format()
+    assert {("iron", "gears"), ("iron", "sticks"), ("iron", "out_raw")} <= report.lanes_found
+    assert not any(e.proto == SPLITTER for e in lay.entities), \
+        "v2 fans out with inline inserter taps, not splitters"
 
 
-def test_underground_crosses_in_circuits():
-    # the iron->circuit lane has to cross the cable lane, so it must tunnel
-    from fgr.layout import UNDERGROUND
-    _, lay = _load("circuits.fgr")
-    assert any(e.proto == UNDERGROUND for e in lay.entities), "expected an underground crossing"
+def test_circuits_two_input_lane_verifies():
+    # iron->circuit must reach circuit past the cable lane; v2 routes it (direct or a dive).
+    g, lay = _load("circuits.fgr")
+    report = verify(g, lay)
+    assert report.ok, report.format()
+    assert {("iron", "circuit"), ("cable", "circuit")} <= report.lanes_found
 
 
-def test_merge_uses_one_input_inserter_and_a_splitter():
-    # `iron_a, iron_b -> gears`: both sources reach gears, which has ONE input
-    # inserter, and a splitter does the merging.
-    from fgr.layout import SPLITTER, INSERTER
+def test_merge_is_multi_tap_no_splitter():
+    # `iron_a, iron_b -> gears`: v2 gives each source its own lane, both tapping gears --
+    # a multi-tap merge with NO splitter.
+    from fgr.layout import SPLITTER
     g, lay = _load("merge.fgr")
     report = verify(g, lay)
     assert report.ok, report.format()
     assert {("iron_a", "gears"), ("iron_b", "gears")} <= report.lanes_found
-    gears_inputs = [e for e in lay.entities if e.proto == INSERTER
-                    and e.meta.get("role") == "in-inserter"
-                    and (e.meta.get("edge", ("", ""))[1] == "gears"
-                         or (e.meta.get("merge") and e.meta["merge"][1] == "gears"))]
-    assert len(gears_inputs) == 1, "merged belt should feed gears via one inserter"
-    assert any(e.proto == SPLITTER for e in lay.entities), "merge should use a splitter"
+    assert not any(e.proto == SPLITTER for e in lay.entities), \
+        "v2 merges by multi-tap, not a splitter"
 
 
-def test_breaking_a_splitter_breaks_the_fanout():
-    from fgr.layout import SPLITTER
-    g, lay = _load("bus.fgr")
-    before = {(e.src, e.dst) for e in g.edges}
-    lay.entities = [e for e in lay.entities if e.proto != SPLITTER]  # rip out the splitters
+def test_breaking_an_output_inserter_breaks_its_lane():
+    # rip out a producer's output inserter; its consumer loses the lane.
+    g, lay = _load("merge.fgr")
+    lay.entities = [e for e in lay.entities
+                    if not (e.proto == INSERTER and e.meta.get("role") == "out"
+                            and e.meta.get("src") == "iron_a")]
     report = verify(g, lay)
     assert not report.ok
-    assert report.lanes_found != before  # some consumer is no longer fed
+    assert ("iron_a", "gears") not in report.lanes_found
