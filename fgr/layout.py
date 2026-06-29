@@ -823,12 +823,24 @@ def _emit_fluids(graph, layout, bodies, occ):
     ys = [t[1] for e in layout.entities for t in e.tiles()]
     bounds = (min(xs) - 12, max(xs) + 12, min(ys) - 12, max(ys) + 12)
 
+    placed_surface: dict[str, set] = {}                       # src -> its surface pipe tiles
+
     for src in [n for n in graph.nodes if n in by_src]:        # deterministic order
+        # ISOLATION: keep this network >=1 tile from every OTHER network's surface pipes,
+        # so different fluids never weld (the verifier merges 4-adjacent surface pipes).
+        avoid = {(t[0] + dx, t[1] + dy)
+                 for o, tiles in placed_surface.items() if o != src
+                 for t in tiles for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))}
+        avoid -= occ
+        occ |= avoid
+        before = len(layout.entities)
         sb = pick_box(src, "output")
         if sb is None:
+            occ -= avoid
             continue
         sa = _box_attach(layout, occ, sb[0], sb[1], src)
         if sa is None:
+            occ -= avoid
             continue
         net = {sa}
         for d in by_src[src]:
@@ -851,3 +863,8 @@ def _emit_fluids(graph, layout, bodies, occ):
                 ok = _lay_belt_path(layout, occ, interior, {"role": "pipe", "net": src}, pipe=True) is not None
             if ok:
                 net |= set(path)
+        # record this network's surface pipe tiles; release the temporary isolation block
+        # (none of the avoid tiles became pipes -- they were blocked, not used).
+        placed_surface[src] = {(e.x, e.y) for e in layout.entities[before:]
+                               if e.proto in (PIPE, PIPE_TO_GROUND)}
+        occ -= avoid
