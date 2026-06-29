@@ -4,9 +4,10 @@
 For the example factories it compiles the DSL, runs the verifier, renders the layout
 via Factorio-FBSR and embeds the PNG (base64) + the verifier verdict + the source; for
 the generated stress battery it shows the compile/verify outcome as a table plus renders
-of the most complex passes. Needs the FBSR service running for images:
+of the most complex passes. Needs FBSR for images -- set FGR_FBSR_SH to your render
+wrapper (see fgr/render.py); without it the report is generated text-only.
 
-    ( cd ../factorio-patch-prediction && scripts/fbsr_service.sh & )
+    export FGR_FBSR_SH=/path/to/your/fbsr.sh
     .venv/bin/python scripts/build_report.py
 """
 from __future__ import annotations
