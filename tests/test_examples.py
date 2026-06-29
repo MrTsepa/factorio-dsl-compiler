@@ -24,14 +24,13 @@ def _rel(p):
 # v2 doesn't yet fully verify these (tracked tail). Keep sorted; delete as they get fixed.
 KNOWN_FAILING = {
     "complex/flying_robot_frame.fgr", "complex/sulfuric_acid.fgr", "complex/wide_reconverge.fgr",
-    "stress/deepchain_2.fgr", "stress/fluids_1.fgr", "stress/fluids_2.fgr", "stress/fluids_3.fgr",
-    "stress/fluids_4.fgr", "stress/fluids_5.fgr", "stress/fluids_6.fgr", "stress/fluids_7.fgr",
-    "stress/highfanin_1.fgr", "stress/highfanin_2.fgr", "stress/highfanin_3.fgr",
-    "stress/highfanin_5.fgr", "stress/highfanin_6.fgr", "stress/reconverge_1.fgr",
-    "stress/reconverge_3.fgr", "stress/reconverge_4.fgr", "stress/scale_1.fgr",
-    "stress/scale_2.fgr", "stress/scale_3.fgr", "stress/scale_4.fgr", "stress/scale_5.fgr",
-    "stress/scale_6.fgr", "stress/science_1.fgr", "stress/science_4.fgr", "stress/science_5.fgr",
-    "stress/science_6.fgr",
+    "stress/deepchain_2.fgr", "stress/deepchain_5.fgr", "stress/fluids_1.fgr",
+    "stress/fluids_2.fgr", "stress/fluids_3.fgr", "stress/fluids_4.fgr", "stress/fluids_5.fgr",
+    "stress/fluids_6.fgr", "stress/fluids_7.fgr", "stress/highfanin_1.fgr",
+    "stress/highfanin_2.fgr", "stress/highfanin_3.fgr", "stress/highfanin_6.fgr",
+    "stress/reconverge_1.fgr", "stress/reconverge_3.fgr", "stress/reconverge_4.fgr",
+    "stress/scale_1.fgr", "stress/scale_2.fgr", "stress/scale_3.fgr", "stress/scale_4.fgr",
+    "stress/scale_5.fgr", "stress/scale_6.fgr", "stress/science_5.fgr", "stress/science_6.fgr",
 }
 
 

@@ -823,6 +823,15 @@ def _emit_fluids(graph, layout, bodies, occ):
     ys = [t[1] for e in layout.entities for t in e.tiles()]
     bounds = (min(xs) - 12, max(xs) + 12, min(ys) - 12, max(ys) + 12)
 
+    # Block every fluid-box tile so a pipe never routes ONTO an unused box (which would weld a
+    # phantom fluid connection in-game). _box_attach unblocks the box it actually attaches.
+    fluid_ep = {e.src for e in fluid_edges} | {e.dst for e in fluid_edges}
+    for name, b in bodies.items():
+        if b.proto == ASSEMBLER and name not in fluid_ep:
+            continue                                          # solid-recipe assembler: no boxes
+        for tile, _flow, _md in _fluid_connections(b.proto, b.x, b.y, b.direction, with_dir=True):
+            occ.add(tile)
+
     placed_surface: dict[str, set] = {}                       # src -> its surface pipe tiles
 
     for src in [n for n in graph.nodes if n in by_src]:        # deterministic order

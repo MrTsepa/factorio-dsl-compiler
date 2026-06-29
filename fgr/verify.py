@@ -228,10 +228,12 @@ def _ug_exit(entrance, d, trans_at):
     for k in range(1, UG_MAX_GAP + 1):
         t = (entrance[0] + dx * k, entrance[1] + dy * k)
         e = trans_at.get(t)
-        if e is not None and e.proto == UNDERGROUND and (e.direction or 0) == d:
-            # first same-direction underground on the line: an exit pairs, an
-            # entrance blocks (steals the pairing) -> our entrance is unpaired
-            return t if e.ug_type == "output" else None
+        # The scan stops at the first SAME-AXIS underground (same tier): a same-direction
+        # exit pairs; a same-direction entrance steals the pairing; an OPPOSITE-direction
+        # one on the line also blocks it (in-game, same-tier opposed undergrounds interfere
+        # -- the workaround is a different belt tier). Perpendicular tunnels are transparent.
+        if e is not None and e.proto == UNDERGROUND and (e.direction or 0) in (d, OPPOSITE[d]):
+            return t if (e.direction or 0) == d and e.ug_type == "output" else None
     return None
 
 
@@ -280,6 +282,14 @@ def _check_fluids(graph: Graph, layout: Layout, bodies, report: Report) -> None:
     fluid_edges = [e for e in graph.edges if e.fluid]
     if not fluid_edges:
         return
+    # An ASSEMBLER only has fluid boxes when its recipe uses fluid (i.e. it's an endpoint of a
+    # fluid lane); a solid-recipe assembler has NONE, so a pipe passing its nominal box tile
+    # does not attach. Chemical plants / tanks / fluid sources always have their boxes.
+    fluid_endpoints = {e.src for e in fluid_edges} | {e.dst for e in fluid_edges}
+
+    def has_fluid_boxes(name, proto):
+        return proto != ASSEMBLER or name in fluid_endpoints
+
     pipes = {(e.x, e.y): e for e in layout.entities if e.proto in (PIPE, PIPE_TO_GROUND)}
     parent = {t: t for t in pipes}
 
@@ -290,9 +300,17 @@ def _check_fluids(graph: Graph, layout: Layout, bodies, report: Report) -> None:
         return t
 
     for t, e in pipes.items():
-        for d in (0, 4, 8, 12):                       # adjacent pipes connect
+        for d in (0, 4, 8, 12):                       # surface connections
             nb = (t[0] + DIR_DELTA[d][0], t[1] + DIR_DELTA[d][1])
-            if nb in pipes:
+            ne = pipes.get(nb)
+            if ne is None:
+                continue
+            # A plain pipe connects on all 4 sides; a pipe-to-ground surface-connects ONLY
+            # toward its open mouth (its other sides / the underground back reach a partner,
+            # not an adjacent surface pipe). Both endpoints must accept the link.
+            t_out = e.proto == PIPE or (e.direction or 0) == d
+            nb_back = ne.proto == PIPE or (ne.direction or 0) == OPPOSITE[d]
+            if t_out and nb_back:
                 parent[find(t)] = find(nb)
         if e.proto == PIPE_TO_GROUND:                 # tunnel: join to the nearest paired exit
             d = e.direction or 0                      # `direction` is the OPEN mouth; the
@@ -312,6 +330,8 @@ def _check_fluids(graph: Graph, layout: Layout, bodies, report: Report) -> None:
 
     out_nets, in_nets = {}, {}                         # name -> set of pipe networks at its boxes
     for name, b in bodies.items():
+        if not has_fluid_boxes(name, b.proto):
+            continue
         on, inn = set(), set()
         for tile, flow, mdir in _fluid_connections(b.proto, b.x, b.y, b.direction, with_dir=True):
             # a fluid box attaches to a PLAIN pipe on its external tile, OR a pipe-to-ground
@@ -335,12 +355,39 @@ def _check_fluids(graph: Graph, layout: Layout, bodies, report: Report) -> None:
     report.add("every fluid lane connects at a real fluid-box (pipe network)", not bad,
                "" if not bad else "unconnected fluid lanes: " + ", ".join(bad))
 
+    # No UNDECLARED fluid lanes (the fluid analogue of "no undeclared belt lanes"): a network
+    # joining one body's PRODUCED fluid to another's CONSUMED fluid is a real in-game path.
+    # Intent is by node kind (source produces, output/tank sink consumes, a machine uses its
+    # box flow) so co-consumers of one source net and a sink tank on it don't read as spurious.
+    src_net, snk_net = {}, {}
+    for name, b in bodies.items():
+        if not has_fluid_boxes(name, b.proto):
+            continue
+        kind = graph.nodes[name].kind if name in graph.nodes else None
+        for tile, flow, mdir in _fluid_connections(b.proto, b.x, b.y, b.direction, with_dir=True):
+            pe = pipes.get(tile)
+            if pe is None or not (pe.proto == PIPE or
+                                  (pe.proto == PIPE_TO_GROUND and (pe.direction or 0) == mdir)):
+                continue
+            net = find(tile)
+            if kind is NodeKind.FLUID or flow == "output":
+                src_net.setdefault(name, set()).add(net)
+            if kind is NodeKind.OUTPUT or flow == "input":
+                snk_net.setdefault(name, set()).add(net)
+    declared = {(e.src, e.dst) for e in fluid_edges}
+    spurious = sorted(f"{a}~>{b}" for a in src_net for b in snk_net
+                      if a != b and (a, b) not in declared and src_net[a] & snk_net[b])
+    report.add("no undeclared fluid lanes", not spurious,
+               "" if not spurious else "spurious fluid lanes: " + ", ".join(spurious))
+
     # Fluid EXCLUSIVITY: in Factorio a pipe network carries ONE fluid. Tag each
     # network with the fluid of every source attached to it; if a network gets two
     # different fluids it's contaminated (the bug the render audit caught that pure
     # reachability misses).
     net_fluids: dict = {}
     for name, b in bodies.items():
+        if not has_fluid_boxes(name, b.proto):
+            continue
         if b.proto == FLUID_SOURCE and b.item:
             for tile, _flow, mdir in _fluid_connections(b.proto, b.x, b.y, b.direction, with_dir=True):
                 pe = pipes.get(tile)
