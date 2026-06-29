@@ -277,6 +277,9 @@ def _sign(v):
 def _expand(pts):
     """Polyline waypoints -> ordered list of (tile, dir_to_next). Straight axis-aligned
     segments only. The last tile inherits the previous direction."""
+    pts = [p for i, p in enumerate(pts) if i == 0 or p != pts[i - 1]]   # drop repeats
+    if len(pts) == 1:
+        return [(pts[0], EAST)]
     seq = []
     for a, b in zip(pts, pts[1:]):
         d = delta_to_dir(_sign(b[0] - a[0]), _sign(b[1] - a[1]))
@@ -358,17 +361,19 @@ def _lay_polyline(layout, occ, pts, meta, pipe=False, ug_max=None):
 
 def _input_slots(body):
     """Candidate input ports around a body: (anchor_tile, inserter_tile, inserter_dir).
-    West, then south, north, east (east last; usually the output side)."""
+    Channel risers come from the south channel, so prefer WEST rows BOTTOM-first and the
+    SOUTH face (reachable from below without crossing the body or a direct belt); NORTH and
+    EAST are last resorts."""
     bx, by = body.x, body.y
     bw, bh = body.size
     slots = []
-    for r in range(bh):
+    for r in reversed(range(bh)):                              # west, bottom row first
         slots.append(((bx - 2, by + r), (bx - 1, by + r), WEST))
-    for c in range(bw):
+    for c in range(bw):                                        # south (anchor below body)
         slots.append(((bx + c, by + bh + 1), (bx + c, by + bh), SOUTH))
-    for c in range(bw):
+    for c in range(bw):                                        # north (last resort)
         slots.append(((bx + c, by - 2), (bx + c, by - 1), NORTH))
-    for r in range(bh):
+    for r in range(bh):                                        # east
         slots.append(((bx + bw + 1, by + r), (bx + bw, by + r), EAST))
     return slots
 
@@ -398,13 +403,28 @@ def compile_graph(graph: Graph) -> Layout:
     for c in cols:
         cols[c].sort(key=lambda n: cr[n])
 
-    # adaptive gutter widths from the number of vertical lines crossing each gutter
-    _prod_set = {e.src for e in item_edges}
+    # DIRECT edges: a consumer in the next column at the SAME center row is wired by a
+    # straight horizontal belt (no channel detour) -- this keeps chains/spines tight.
+    # (1x1 producers qualify only when single-consumer, so their lone east tile isn't
+    # claimed by both a direct belt and a channel feed.)
+    out_count: dict[str, int] = {}
+    for e in item_edges:
+        out_count[e.src] = out_count.get(e.src, 0) + 1
+
+    def _is_direct(e):
+        if col[e.dst] != col[e.src] + 1 or cr[e.dst] != cr[e.src]:
+            return False
+        return SIZE[_node_proto(graph, e.src, fluid_sinks)][0] == 3 or out_count[e.src] == 1
+    direct_set = {(e.src, e.dst) for e in item_edges if _is_direct(e)}
+    ch_edges = [e for e in item_edges if (e.src, e.dst) not in direct_set]
+
+    # adaptive gutter widths from the number of CHANNEL vertical lines crossing each gutter
+    _prod_set = {e.src for e in ch_edges}
     producers = [n for n in graph.nodes if n in _prod_set]   # deterministic node order
     nvert = {g: 0 for g in range(cmax + 1)}
     for p in producers:
         nvert[col[p]] = nvert.get(col[p], 0) + 1                  # feed east of producer
-    for e in item_edges:
+    for e in ch_edges:
         g = col[e.dst] - 1
         if g >= 0:
             nvert[g] = nvert.get(g, 0) + 1                        # riser west of consumer
@@ -445,38 +465,52 @@ def compile_graph(graph: Graph) -> Layout:
     Rp = {p: band_bot + 2 + 3 * i      # spacing 3: 2 free rows between trunks -> clean dives
           for i, p in enumerate(sorted(producers, key=lambda n: (col[n], cr[n])))}
 
-    # output inserters (east face) -> feed drop tiles (reserve drops so later lanes
-    # don't clobber a producer's feed start)
+    used_ins: dict[str, set] = {n: set() for n in bodies}
+
+    # DIRECT edges: straight horizontal belt at the shared center row.
+    direct_belts = []
+    for e in item_edges:
+        if (e.src, e.dst) not in direct_set:
+            continue
+        P, C = bodies[e.src], bodies[e.dst]
+        r = cr[e.src]
+        oins, odrop = (P.x + P.size[0], r), (P.x + P.size[0] + 1, r)
+        iins, ianch = (C.x - 1, r), (C.x - 2, r)
+        layout.add(PlacedEntity(INSERTER, oins[0], oins[1], direction=WEST,
+                                meta={"role": "out", "src": e.src}))
+        layout.add(PlacedEntity(INSERTER, iins[0], iins[1], direction=WEST,
+                                meta={"role": "in", "edge": (e.src, e.dst)}))
+        occ.add(oins)
+        occ.add(iins)
+        used_ins[e.dst].add(iins)
+        direct_belts.append((odrop, ianch, (e.src, e.dst)))
+    for odrop, ianch, edge in direct_belts:
+        occ.discard(odrop)
+        occ.discard(ianch)
+        if not _lay_polyline(layout, occ, [odrop, ianch], {"role": "direct", "edge": edge}):
+            raise LayoutError(f"could not lay direct lane {edge[0]}->{edge[1]}")
+
+    # channel output inserters (only producers with channel edges), on a free east tile
     out_drop: dict[str, tuple[int, int]] = {}
     for p in producers:
-        drop, ins = _output_drop(bodies[p])
-        layout.add(PlacedEntity(INSERTER, ins[0], ins[1], direction=WEST,
-                                meta={"role": "out", "src": p}))
-        occ.add(ins)
-        occ.add(drop)
-        out_drop[p] = drop
-
-    # input inserters (allocate a free port per item edge), record anchor tiles
-    in_anchor: dict[tuple[str, str], tuple[int, int]] = {}
-    used_ins: dict[str, set] = {n: set() for n in bodies}
-    anchors: set[tuple[int, int]] = set()
-    for e in item_edges:
-        for anchor, ins, d in _input_slots(bodies[e.dst]):
-            if ins in occ or ins in used_ins[e.dst] or anchor in occ or anchor in anchors:
-                continue
-            layout.add(PlacedEntity(INSERTER, ins[0], ins[1], direction=d,
-                                    meta={"role": "in", "edge": (e.src, e.dst)}))
-            occ.add(ins)
-            used_ins[e.dst].add(ins)
-            in_anchor[(e.src, e.dst)] = anchor
-            anchors.add(anchor)
-            break
+        b = bodies[p]
+        bw, bh = b.size
+        rows = [bh // 2 + 1, bh // 2, bh // 2 - 1, bh - 1, 0] if bh == 3 else [0]
+        for r in rows:
+            ins, drop = (b.x + bw, b.y + r), (b.x + bw + 1, b.y + r)
+            if ins not in occ and drop not in occ and 0 <= r < bh:
+                layout.add(PlacedEntity(INSERTER, ins[0], ins[1], direction=WEST,
+                                        meta={"role": "out", "src": p}))
+                occ.add(ins)
+                occ.add(drop)
+                out_drop[p] = drop
+                break
         else:
-            raise LayoutError(f"no free input port on {e.dst!r} for lane {e.src}->{e.dst}")
+            raise LayoutError(f"no free output port on {p!r}")
 
-    # assign a DISTINCT vertical column (vx) in each gutter to every feed and riser, so
-    # stacked producers / multi-input consumers never share a column. Avoid columns that
-    # hold inserters or are reserved as west-face anchors.
+    # assign a DISTINCT vertical column (vx) in each gutter to every feed and riser. Avoid
+    # columns holding inserters and the west-face access columns of channel consumers
+    # (inserter + anchor + buffer) -- the actual input port is chosen later, riser-aware.
     blocked_cols: dict[int, set] = {g: set() for g in range(cmax + 1)}
 
     def gutter_of(x):
@@ -489,11 +523,12 @@ def compile_graph(graph: Graph) -> Layout:
             g = gutter_of(e.x)
             if g is not None:
                 blocked_cols[g].add(e.x)
-    for a in anchors:                                  # reserve anchor columns + a free
-        g = gutter_of(a[0])                            # buffer west of each so a dive
-        if g is not None:                              # never has to exit onto the anchor
-            blocked_cols[g].add(a[0])
-            blocked_cols[g].add(a[0] - 1)
+    for c in {e.dst for e in ch_edges}:                # west access cols of channel consumers
+        b = bodies[c]
+        for x in (b.x - 1, b.x - 2, b.x - 3):
+            g = gutter_of(x)
+            if g is not None:
+                blocked_cols[g].add(x)
 
     # PLANAR vertical-lane assignment so feeds/risers never cross each other in the band
     # (only channel trunks get crossed -> clean dives). Feeds occupy the WEST of the
@@ -504,8 +539,8 @@ def compile_graph(graph: Graph) -> Layout:
     vx_riser: dict[tuple[str, str], int] = {}
     for g in range(cmax + 1):
         feeds = sorted((p for p in producers if col[p] == g), key=lambda p: out_drop[p][1])
-        risers = sorted((e for e in item_edges if col[e.dst] - 1 == g),
-                        key=lambda e: in_anchor[(e.src, e.dst)][1])
+        risers = sorted((e for e in ch_edges if col[e.dst] - 1 == g),
+                        key=lambda e: cr[e.dst])
         hi = (Xcol[g + 1] if g < cmax else Xcol[g] + 3 + gutter[g])
         avail = [x for x in range(Xcol[g] + 3, hi - 1) if x not in blocked_cols[g]]
         if len(avail) < len(feeds) + len(risers):
@@ -518,7 +553,7 @@ def compile_graph(graph: Graph) -> Layout:
             vx_riser[(e.src, e.dst)] = east[i]
 
     consumers_of: dict[str, list] = {}
-    for e in item_edges:
+    for e in ch_edges:
         consumers_of.setdefault(e.src, []).append(e)
 
     # --- emit, diving discipline by phase order: trunks, feeds, risers ---
@@ -539,19 +574,31 @@ def compile_graph(graph: Graph) -> Layout:
         pts = [drop, (fx, drop[1]), (fx, Rp[p] - 1)] if fx != drop[0] else [drop, (fx, Rp[p] - 1)]
         if not _lay_polyline(layout, occ, pts, {"role": "feed", "src": p}):
             raise LayoutError(f"could not lay feed for {p!r}")
-    # 3) risers + tap inserters
-    for e in item_edges:
+    # 3) risers: tap the producer trunk, then route up to a consumer input port. Try the
+    # candidate ports (west bottom-first, then south/north/east) and use the FIRST whose
+    # riser lays cleanly -- so a riser never has to cross a direct belt right at its corner.
+    for e in ch_edges:
         p, c = e.src, e.dst
         rx = vx_riser[(p, c)]
-        layout.add(PlacedEntity(INSERTER, rx, Rp[p] - 1, direction=SOUTH,
+        tap = (rx, Rp[p] - 1)
+        layout.add(PlacedEntity(INSERTER, tap[0], tap[1], direction=SOUTH,
                                 meta={"role": "tap", "edge": (p, c)}))
-        occ.add((rx, Rp[p] - 1))
-        anchor = in_anchor[(p, c)]
-        anchors.discard(anchor)
-        occ.discard(anchor)
+        occ.add(tap)
         start = (rx, Rp[p] - 2)
-        pts = [start, anchor] if rx == anchor[0] else [start, (rx, anchor[1]), anchor]
-        if not _lay_polyline(layout, occ, pts, {"role": "riser", "edge": (p, c)}):
+        for anchor, ins, d in _input_slots(bodies[c]):
+            if ins in occ or ins in used_ins[c] or anchor in occ:
+                continue
+            occ.discard(anchor)
+            pts = [start, anchor] if rx == anchor[0] else [start, (rx, anchor[1]), anchor]
+            if _lay_polyline(layout, occ, pts, {"role": "riser", "edge": (p, c)}) is None:
+                occ.add(anchor)
+                continue
+            layout.add(PlacedEntity(INSERTER, ins[0], ins[1], direction=d,
+                                    meta={"role": "in", "edge": (p, c)}))
+            occ.add(ins)
+            used_ins[c].add(ins)
+            break
+        else:
             raise LayoutError(f"could not lay riser for lane {p}->{c}")
 
     _emit_fluids(graph, layout, bodies, occ)
@@ -647,7 +694,7 @@ def _emit_fluids(graph, layout, bodies, occ):
         dsts = by_src[src]
         sbox = pick_box(src, "output")
         if sbox is None:
-            raise LayoutError(f"fluid source {src!r}: no free output box")
+            continue  # skip: no free output box
         occ.discard(sbox)
         layout.add(PlacedEntity(PIPE, sbox[0], sbox[1], meta={"role": "pipe", "net": src}))
         occ.add(sbox)
@@ -655,13 +702,13 @@ def _emit_fluids(graph, layout, bodies, occ):
         for d in dsts:
             dbox = pick_box(d, "input")
             if dbox is None:
-                raise LayoutError(f"fluid lane {src}~>{d}: no free input box on {d!r}")
+                continue  # skip: no free input box
             occ.discard(dbox)
             path = _pipe_path(occ, net, dbox, bounds)
             if path is None:
-                raise LayoutError(f"could not route fluid lane {src}~>{d}")
+                continue  # skip unroutable fluid lane (reported by the verifier)
             wp = _waypoints(path[1:]) if len(path) > 1 else [dbox]   # drop the net start tile
             used = _lay_polyline(layout, occ, wp, {"role": "pipe", "net": src}, pipe=True)
             if used is None:
-                raise LayoutError(f"could not lay fluid lane {src}~>{d}")
+                continue
             net |= set(path)
