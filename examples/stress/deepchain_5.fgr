@@ -1,0 +1,71 @@
+# deepchain_5: deep oil-to-rocket spine (depth 10) mixing a long fluid front with
+# a long item tail. Crude is refined and cracked, the petroleum makes plastic, the
+# plastic makes circuits, the circuits make processing units and a rocket control
+# unit, and the tail assembles a rocket part. Sulfur/acid is produced on the side.
+
+input     coal         : coal
+input     copper       : copper-plate
+input     iron         : iron-plate
+input     steel_in     : steel-plate
+fluid     crude        : crude-oil
+fluid     water        : water
+
+chemical  refinery     : lubricant
+chemical  heavy_crack  : heavy-oil-cracking
+chemical  light_crack  : light-oil-cracking
+chemical  plastic_plant: plastic-bar
+chemical  sulfur_plant : sulfur
+chemical  acid_plant   : sulfuric-acid
+assembler cable        : copper-cable
+assembler green        : electronic-circuit
+assembler red          : advanced-circuit
+assembler  blue         : processing-unit
+assembler speed_mod    : speed-module
+assembler rcu          : engine-unit
+chemical  solid_fuel   : solid-fuel-from-light-oil
+assembler rocket_fuel  : rocket-fuel
+assembler lds          : low-density-structure
+assembler rocket_part  : low-density-structure
+output    parts_out
+
+# --- deep fluid front: crude -> refine -> crack -> crack -> plastic ---
+crude ~> refinery
+water ~> refinery
+refinery ~> heavy_crack ~> light_crack ~> plastic_plant
+coal -> plastic_plant
+
+# --- sulfur + acid side chain ---
+light_crack ~> sulfur_plant
+water ~> sulfur_plant
+sulfur_plant -> acid_plant
+iron -> acid_plant
+water ~> acid_plant
+
+# --- electronics tail: plastic -> red -> blue ---
+copper -> cable -> green -> red
+plastic_plant -> red
+iron -> green
+red -> blue
+green -> blue
+acid_plant ~> blue
+
+# --- modules + rocket control ---
+green -> speed_mod
+red -> speed_mod
+blue -> rcu
+speed_mod -> rcu
+
+# --- rocket fuel from light oil ---
+light_crack ~> solid_fuel
+solid_fuel -> rocket_fuel
+
+# --- low density structure ---
+copper -> lds
+steel_in -> lds
+plastic_plant -> lds
+
+# --- spine tail: assemble the rocket part ---
+rcu -> rocket_part
+lds -> rocket_part
+rocket_fuel -> rocket_part
+rocket_part -> parts_out

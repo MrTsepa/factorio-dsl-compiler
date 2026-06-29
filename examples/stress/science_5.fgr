@@ -1,0 +1,68 @@
+# science_5: utility science, the deepest chemical tree. processing-unit needs
+# sulfuric-acid (chem); flying-robot-frame needs electric-engine-unit (lubricant,
+# chem) + battery (chem). Acid is produced then piped onward by pipe.
+#   utility = utility-science-pack = processing-unit + flying-robot-frame + low-density-structure
+#     processing-unit       = electronic-circuit + advanced-circuit + sulfuric-acid (chem)
+#     flying-robot-frame    = electric-engine-unit + battery + steel-plate + electronic-circuit
+#     low-density-structure = copper-plate + steel-plate + plastic-bar
+
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+fluid water : water
+fluid petroleum_gas : petroleum-gas
+fluid lubricant : lubricant
+
+furnace steel : steel-plate
+chemical plastic : plastic-bar
+chemical sulfur : sulfur
+chemical acid : sulfuric-acid
+assembler electric_engine : electric-engine-unit
+chemical battery : battery
+assembler processing_unit : processing-unit
+
+assembler gear : iron-gear-wheel
+assembler cable : copper-cable
+assembler green_chip : electronic-circuit
+assembler red_chip : advanced-circuit
+assembler pipe_part : pipe
+assembler engine : engine-unit
+assembler flying_robot_frame : flying-robot-frame
+assembler low_density : low-density-structure
+assembler utilsci : utility-science-pack
+
+output util_out
+
+# raw distribution
+iron -> gear, green_chip, steel, pipe_part, acid, battery
+copper -> cable, battery, low_density
+coal -> plastic
+
+# fluids by pipe
+water ~> sulfur, acid
+petroleum_gas ~> plastic, sulfur
+lubricant ~> electric_engine
+
+# circuits
+cable -> green_chip, red_chip
+green_chip -> red_chip, electric_engine, processing_unit, flying_robot_frame
+plastic -> red_chip, low_density
+red_chip -> processing_unit
+
+# engines + smelting
+steel -> engine, flying_robot_frame, low_density
+pipe_part -> engine
+gear -> engine
+engine -> electric_engine
+
+# chemical chain
+sulfur -> acid
+acid ~> battery, processing_unit
+electric_engine -> flying_robot_frame
+battery -> flying_robot_frame
+
+# utility science assembly
+processing_unit -> utilsci
+flying_robot_frame -> utilsci
+low_density -> utilsci
+utilsci -> util_out

@@ -1,0 +1,13 @@
+# A long dependency chain (depth ~10); steel-plate is smelted in a furnace.
+input iron : iron-plate
+assembler a1 : iron-gear-wheel
+assembler a2 : pipe
+assembler a3 : engine-unit
+furnace a4 : steel-plate
+assembler a5 : iron-stick
+assembler a6 : rail
+assembler a7 : electric-furnace
+assembler a8 : productivity-module
+assembler a9 : production-science-pack
+output out
+iron -> a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> out

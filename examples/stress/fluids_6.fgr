@@ -1,0 +1,38 @@
+# Full petrochemical complex: a heavy -> light -> petroleum cracking cascade
+# feeds plastic and sulfur; sulfur + water -> sulfuric acid -> batteries; plastic
+# plus green circuits -> advanced circuits. Heavy oil also branches to lubricant.
+# Many shared water and chemical->chemical fluid lanes; wide reconvergent DAG.
+input coal : coal
+input iron : iron-plate
+input copper : copper-plate
+fluid heavy : heavy-oil
+fluid water : water
+chemical crack_heavy : heavy-oil-cracking
+chemical crack_light : light-oil-cracking
+chemical plastic : plastic-bar
+chemical make_sulfur : sulfur
+chemical acid : sulfuric-acid
+chemical lube : lubricant
+chemical battery : battery
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+output red_out
+output battery_out
+output lube_tank
+
+heavy ~> crack_heavy, lube
+water ~> crack_heavy, crack_light, make_sulfur, acid
+crack_heavy ~> crack_light
+crack_light ~> plastic, make_sulfur
+coal -> plastic
+make_sulfur -> acid
+iron -> acid, green, battery
+copper -> cable, battery
+cable -> green, red
+green -> red
+plastic -> red
+acid ~> battery
+lube ~> lube_tank
+red -> red_out
+battery -> battery_out

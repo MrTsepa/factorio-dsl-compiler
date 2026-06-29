@@ -19,16 +19,45 @@ exactly, whether a generated layout matches the requirements or not.
                                             Factorio blueprint string ──▶ FBSR ──▶ PNG
 ```
 
+## Gallery
+
+Each factory below is **compiled from a few lines of DSL, verified, then rendered with
+[FBSR](https://github.com/demodude4u/Factorio-FBSR)** (real game sprites).
+📊 **[Open the full interactive report →](https://mrtsepa.github.io/factorio-dsl-compiler/report.html)**
+— every example with its DSL source, the verifier's checks, and a one-click *copy blueprint*
+button (also in [`docs/report.html`](docs/report.html)).
+
+**`flying_robot_frame`** — a deep multi-step build with a furnace, oil/chemical **fluids**
+(pipes + a storage tank), and reconvergent item belts:
+
+![flying-robot-frame](docs/img/flying_robot_frame.png)
+
+**`sulfuric_acid`** — water piped into a chemical plant, acid out to a tank; items on belts,
+fluids on pipes, each attaching at the machine's real fluid-box tiles:
+
+![sulfuric-acid](docs/img/sulfuric_acid.png)
+
+**`processing_unit`** — reconvergent electronics with sulfuric acid as a fluid input:
+
+![processing-unit](docs/img/processing_unit.png)
+
+**`circuits`** (an underground belt tunnels the iron lane under the cable lane) and **`bus`**
+(one belt fanned out to many via a splitter bus):
+
+![circuits](docs/img/circuits.png)
+![bus](docs/img/bus.png)
+
 ## The DSL
 
-Primitives are exactly the ones requested: **input chest**, **inserter**,
-**assembler**, **belt lane** (a logical connection; the compiler picks the tiles),
-**output chest**. You only ever write chests/assemblers and the lanes between
-them — inserters, belts, **splitters** (for fan-out) and **underground belts**
-(for crossings) are synthesized by the compiler.
+Primitives: **input chest**, **assembler**, **furnace** (smelting), **chemical
+plant** + **fluid source** (for fluid recipes), **output chest/tank**, and the
+lanes between them — **belt lanes** (`->`) for items and **fluid lanes** (`~>`)
+for pipes. You only write nodes and lanes; inserters, belts, **splitters** (fan-out/
+merge), **underground belts** (crossings), and **pipes** (with the right fluid-box
+attachment) are all synthesized by the compiler.
 
 ```
-# examples/gears.fgr
+# examples/basic/gears.fgr
 input     iron  : iron-plate          # an input chest stocked with iron plates
 assembler gears : iron-gear-wheel     # an assembler crafting gears
 output    out                         # an output chest
@@ -39,23 +68,33 @@ gears -> out                          # a belt lane: gears -> out
 
 - `A -> B -> C` chains expand to `A -> B` and `B -> C`.
 - `A -> B, C, D` is **one belt off A** that a splitter bus fans out to several
-  consumers — not three separate belts (`examples/bus.fgr`, `examples/fanout.fgr`).
+  consumers — not three separate belts (`examples/basic/bus.fgr`, `examples/basic/fanout.fgr`).
 - `A, B -> C` is the mirror — **two sources merged onto one belt** (a splitter
-  combines them) feeding a single input inserter on C (`examples/merge.fgr`).
+  combines them) feeding a single input inserter on C (`examples/basic/merge.fgr`).
+
+More primitives for realistic recipes (`examples/complex/`):
+- `furnace N : item` — smelting (electric-furnace), e.g. `furnace steel : steel-plate`.
+- `chemical N : recipe` — a chemical plant, for any recipe that uses a **fluid**.
+- `fluid N : fluid` — an infinite fluid source (infinity-pipe).
+- `A ~> B` — a **fluid lane**: carried by **pipe**, not belt. Pipes attach at the
+  entity's real **fluid-box** tiles, which rotate with the machine (the model is
+  rotation-aware; chemical plants are kept north-facing so fluid boxes stay clear of
+  the item inserters), and the verifier checks the pipe network actually reaches those
+  fluid boxes — and that no network carries two fluids. See `examples/complex/sulfuric_acid.fgr`.
 - Inputs are emitted as **infinity chests stocked with their item** (a regular
   chest can't carry contents in a blueprint), so the factory is actually runnable.
 - The router lays **underground belts** to tunnel under obstacles, so lanes can
-  cross (`examples/circuits.fgr` tunnels the iron lane under the cable lane).
+  cross (`examples/basic/circuits.fgr` tunnels the iron lane under the cable lane).
 
-See `examples/circuits.fgr` for a multi-input assembler + an underground crossing,
-and `examples/bus.fgr` for one belt feeding three consumers via splitters.
+See `examples/basic/circuits.fgr` for a multi-input assembler + an underground crossing,
+and `examples/basic/bus.fgr` for one belt feeding three consumers via splitters.
 
 ## Run it
 
 ```bash
 uv venv --python 3.10 .venv && uv pip install pytest   # one-time
-.venv/bin/python -m fgr compile examples/gears.fgr     # compile + verify, print blueprint string
-.venv/bin/python -m fgr verify  examples/circuits.fgr  # just the verifier report
+.venv/bin/python -m fgr compile examples/basic/gears.fgr     # compile + verify, print blueprint string
+.venv/bin/python -m fgr verify  examples/basic/circuits.fgr  # just the verifier report
 .venv/bin/python -m pytest -q                          # tests
 ```
 
@@ -64,12 +103,26 @@ once, then pass `-o`:
 
 ```bash
 ( cd ../factorio-patch-prediction && scripts/fbsr_service.sh & )   # warm JVM + sprite atlas
-.venv/bin/python -m fgr compile examples/circuits.fgr -o out/circuits.png
+.venv/bin/python -m fgr compile examples/basic/circuits.fgr -o out/circuits.png
 ```
 
 (Override the FBSR wrapper path with `FGR_FBSR_SH=/path/to/fbsr.sh` if your repos
 live elsewhere.) Rendering is **only** for visualization — correctness comes from
 the verifier, not the picture.
+
+## Repository layout
+
+```
+fgr/                 the package (DSL → IR → layout → verify → blueprint/encode → render)
+examples/
+  basic/             intro factories (gears, circuits, bus, fanout, merge, science)
+  complex/           hand-authored realistic builds (furnaces, oil/chem fluids, deep chains)
+  stress/            machine-generated complex DAGs — the stress battery
+scripts/             stress_complex.py (battery harness) · independent_check.py · build_report.py
+tests/               pytest suite (DSL, verifier, fluids, complex, blueprint, model-validation)
+out/                 generated artifacts (blueprint strings, renders, report.html) — gitignored
+README.md · STATUS.md   docs (STATUS.md = latest results + where it fails)
+```
 
 ## How the pieces work
 
@@ -157,14 +210,15 @@ them:
    flows down it (e.g. that the circuit assembler's two inputs get iron vs. cable,
    not crossed). Propagating item identity from inputs/recipes is the next verifier
    upgrade.
-4. **Fan-out and merge work, but the manifolds are rigid.** `A -> B, C` (one belt
-   split to many) and `A, B -> C` (many merged onto one belt) both build splitter
-   chains, but they assume a tidy row layout (the fan-out bus needs the source at
-   or above its consumers — it raises a clear error otherwise) and the splitters
-   are plain, not priority/balanced.
-5. **Buildability gaps.** Power poles and fluids are ignored (fine for rendering,
-   not for dropping into a real game). Inputs use infinity chests, so they only
-   "run" in sandbox/editor.
+4. **Manifolds are rigid (the current ceiling).** `A -> B, C` (fan-out) and
+   `A, B -> C` (merge) build splitter chains, but the fan-out chain is *compact* and its
+   peel tails run as long diagonals to spread-out consumers; past ~6 consumers those tails
+   saturate the corridor and the router gives up. This is the root cause of the remaining
+   stress failures — a row-aligned *bus* manifold (short straight peels) is the fix. See
+   `STATUS.md` for the current pass rate and the exact failing cases.
+5. **Buildability gaps.** Power poles are still ignored. (Fluids *are* handled now —
+   pipes, pipe-to-ground, real fluid boxes, one-fluid-per-network.) Inputs use infinity
+   chests, so the factory only "runs" in sandbox/editor.
 6. **Node↔entity correspondence.** Two identical assemblers are indistinguishable,
    so the layout must declare which machine is which named node; a model-generator
    would have to emit that mapping (or the verifier infer it — ambiguous).

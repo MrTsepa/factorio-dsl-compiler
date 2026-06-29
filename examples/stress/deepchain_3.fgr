@@ -1,0 +1,71 @@
+# deepchain_3: robotics deep spine into utility science.
+# Spine (depth 8): iron-ore -> iron-plate -> gear -> engine -> electric-engine
+# -> flying-robot-frame -> utility-science-pack. Lubricant/acid fluids feed the
+# electric engine and battery; a logistic-robot branch gives a second output.
+
+input     iron_ore   : iron-ore
+input     copper     : copper-plate
+input     plastic    : plastic-bar
+fluid     lube       : lubricant
+fluid     acid       : sulfuric-acid
+
+furnace   iron_plate : iron-plate
+furnace   steel      : steel-plate
+assembler gear       : iron-gear-wheel
+assembler pipe_part  : pipe
+assembler engine     : engine-unit
+assembler  eengine    : electric-engine-unit
+chemical  battery    : battery
+assembler cable      : copper-cable
+assembler green      : electronic-circuit
+assembler red        : advanced-circuit
+assembler  blue       : processing-unit
+assembler frame      : flying-robot-frame
+assembler lds        : low-density-structure
+assembler logbot     : logistic-robot
+assembler util       : utility-science-pack
+output    util_out
+output    bot_out
+
+# --- main spine (depth 8) ---
+iron_ore -> iron_plate -> gear -> engine -> eengine -> frame -> util -> util_out
+
+# --- iron plate fans out to the early intermediates (one belt) ---
+iron_plate -> steel, pipe_part, battery, green
+
+# --- engine ingredients ---
+pipe_part -> engine
+steel -> engine
+
+# --- electric engine: needs lubricant (fluid) + green ---
+green -> eengine
+lube ~> eengine
+
+# --- battery: needs copper + acid (fluid) ---
+copper -> cable, battery
+acid ~> battery
+
+# --- circuits ---
+cable -> green
+green -> red
+plastic -> red
+green -> blue
+red -> blue
+acid ~> blue
+
+# --- flying robot frame ingredients ---
+steel -> frame
+green -> frame
+battery -> frame
+
+# --- low density structure into utility science ---
+steel -> lds
+copper -> lds
+plastic -> lds
+lds -> util
+blue -> util
+
+# --- logistic robot branch (second output) ---
+frame -> logbot
+red -> logbot
+logbot -> bot_out

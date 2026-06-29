@@ -1,0 +1,35 @@
+# Drone-and-rail hub: flying-robot-frame + locomotive merged into one output.
+# Stresses merges (A, B -> C) and fan-out on shared steel/green/engine buses.
+input iron : iron-plate
+input copper : copper-plate
+fluid lube : lubricant
+fluid acid : sulfuric-acid
+furnace steel : steel-plate
+assembler cable : copper-cable
+assembler gear : iron-gear-wheel
+assembler pipe_part : pipe
+assembler green : electronic-circuit
+assembler engine : engine-unit
+assembler eengine : electric-engine-unit
+chemical battery : battery
+assembler frame : flying-robot-frame
+assembler loco : locomotive
+output hub_out
+# raw distribution
+iron -> gear, pipe_part, green, steel, battery
+copper -> cable, battery
+cable -> green
+# fluids
+lube ~> eengine
+acid ~> battery
+# shared buses fan out to deep consumers
+green -> eengine, frame, loco
+steel -> engine, frame, loco
+engine -> eengine, loco
+# merge: two parts onto one belt into the engine
+gear, pipe_part -> engine
+# deep modules
+eengine -> frame
+battery -> frame
+# merge two finished vehicles/frames into the output
+frame, loco -> hub_out

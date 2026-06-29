@@ -1,0 +1,37 @@
+# Petrochemical complex (fluid-heavy): one oil refinery's outputs reconverge
+# into the whole chain. crude + water feed the refinery; refinery & cracking
+# plants fan out fluids to lube, solid-fuel, plastic, sulfur, acid, rocket-fuel.
+fluid crude : crude-oil
+fluid water : water
+input coal : coal
+input iron : iron-plate
+input copper : copper-plate
+chemical refinery : lubricant
+chemical heavy_crack : heavy-oil-cracking
+chemical light_crack : light-oil-cracking
+chemical lube : lubricant
+chemical solid_fuel : solid-fuel-from-light-oil
+chemical plastic : plastic-bar
+chemical sulfur : sulfur
+chemical acid : sulfuric-acid
+chemical battery : battery
+assembler rocket_fuel : rocket-fuel
+output lube_tank
+output acid_tank
+output products
+
+water ~> refinery, heavy_crack, light_crack, sulfur, acid
+crude ~> refinery
+refinery ~> heavy_crack, lube, solid_fuel, plastic, rocket_fuel, sulfur
+heavy_crack ~> light_crack, solid_fuel
+light_crack ~> plastic
+acid ~> battery, acid_tank
+lube ~> lube_tank
+coal -> plastic
+iron -> acid, battery
+copper -> battery
+sulfur -> acid
+solid_fuel -> rocket_fuel
+plastic -> products
+battery -> products
+rocket_fuel -> products

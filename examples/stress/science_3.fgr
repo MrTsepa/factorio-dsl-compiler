@@ -1,0 +1,61 @@
+# science_3: red + green + military science mall, furnace-heavy (steel + brick),
+# using a merge (coal + iron -> grenade). No fluids; all items on belts.
+#   red      = automation-science-pack = copper-plate + iron-gear-wheel
+#   green    = logistic-science-pack   = inserter + transport-belt
+#   military = military-science-pack    = piercing-rounds-magazine + grenade + stone-wall
+
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+input stone : stone
+
+furnace steel : steel-plate
+furnace brick : stone-brick
+
+assembler gear : iron-gear-wheel
+assembler cable : copper-cable
+assembler green_chip : electronic-circuit
+assembler arm : inserter
+assembler belt : transport-belt
+assembler firearm_mag : firearm-magazine
+assembler pierce : piercing-rounds-magazine
+assembler grenade : grenade
+assembler wall : stone-wall
+assembler redsci : automation-science-pack
+assembler greensci : logistic-science-pack
+assembler milsci : military-science-pack
+
+output red_out
+output green_out
+output mil_out
+
+# raw distribution
+iron -> gear, green_chip, arm, belt, steel, firearm_mag
+copper -> cable, redsci, pierce
+stone -> brick
+
+# merge: two belts feed the grenade line
+coal, iron -> grenade
+
+# smelting
+steel -> pierce
+brick -> wall
+
+# circuits / movement
+cable -> green_chip
+green_chip -> arm
+gear -> arm, belt, redsci
+
+# ammo line
+firearm_mag -> pierce
+
+# science assembly
+pierce -> milsci
+grenade -> milsci
+wall -> milsci
+arm -> greensci
+belt -> greensci
+
+redsci -> red_out
+greensci -> green_out
+milsci -> mil_out

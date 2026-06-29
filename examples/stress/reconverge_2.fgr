@@ -1,0 +1,52 @@
+# Full science suite: red + green + military + chemical packs. iron, gears,
+# electronic-circuit, copper, steel are shared across many sub-assemblies at
+# varied depth. sulfur is a chemical-plant recipe (water + petroleum-gas fluids).
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+input stone_brick : stone-brick
+input plastic : plastic-bar
+fluid water : water
+fluid petro : petroleum-gas
+furnace steel : steel-plate
+assembler gear : iron-gear-wheel
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red_circ : advanced-circuit
+assembler pipe_part : pipe
+assembler belt : transport-belt
+assembler arm : inserter
+assembler engine : engine-unit
+assembler mag : firearm-magazine
+assembler pmag : piercing-rounds-magazine
+assembler grenade : grenade
+assembler wall : stone-wall
+chemical sulfur : sulfur
+assembler redsci : automation-science-pack
+assembler greensci : logistic-science-pack
+assembler milsci : military-science-pack
+assembler chemsci : chemical-science-pack
+output sci_out
+
+iron -> gear, green, steel, pipe_part, belt, arm, mag, grenade
+copper -> cable, redsci, pmag
+gear -> belt, arm, redsci, engine
+cable -> green, red_circ
+green -> arm, red_circ
+steel -> pmag, engine
+plastic -> red_circ
+coal -> grenade
+stone_brick -> wall
+pipe_part -> engine
+mag -> pmag
+engine -> chemsci
+red_circ -> chemsci
+sulfur -> chemsci
+pmag -> milsci
+grenade -> milsci
+wall -> milsci
+belt -> greensci
+arm -> greensci
+water ~> sulfur
+petro ~> sulfur
+redsci, greensci, milsci, chemsci -> sci_out

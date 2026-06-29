@@ -1,0 +1,81 @@
+# scale_4: military / defense megafactory.
+# Ammo, turrets, grenades, cannon + artillery shells. Deep shell chain
+# (cannon -> explosive-cannon -> artillery) plus wide fan-in to 3 outputs.
+
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+input stone : stone
+fluid water : water
+fluid crude : crude-oil
+
+furnace steel : steel-plate
+furnace brick : stone-brick
+
+chemical pet1 : lubricant
+chemical sulfur : sulfur
+chemical plastic : plastic-bar
+chemical explosives : explosives
+chemical acid : sulfuric-acid
+chemical battery : battery
+chemical flammo : flamethrower-ammo
+
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler gear : iron-gear-wheel
+assembler firearm : firearm-magazine
+assembler piercing : piercing-rounds-magazine
+assembler grenade : grenade
+assembler clustergrenade : cluster-grenade
+assembler wall : stone-wall
+assembler gate : gate
+assembler gunturret : gun-turret
+assembler laserturret : laser-turret
+assembler rocket_item : rocket
+assembler exprocket : explosive-rocket
+assembler landmine : land-mine
+assembler capsule : defender-capsule
+assembler shell : cannon-shell
+assembler exshell : explosive-cannon-shell
+assembler radar : radar
+assembler artyshell : artillery-shell
+
+output ammo_out
+output turret_out
+output explosive_out
+
+# --- fluids ---
+crude ~> pet1, flammo
+water ~> sulfur, acid, explosives
+pet1 ~> sulfur, plastic
+acid ~> battery
+
+# --- base item distribution ---
+iron -> steel, gear, green, firearm, grenade, acid, battery, rocket_item, radar
+copper -> cable, battery, gunturret
+coal -> plastic, grenade, explosives
+stone -> brick
+
+# --- intermediates ---
+steel -> piercing, clustergrenade, gate, gunturret, laserturret, landmine, flammo, shell
+brick -> wall
+cable -> green
+green -> gate, laserturret, rocket_item, capsule, radar
+plastic -> shell
+sulfur -> acid, explosives
+gear -> capsule, radar
+battery -> laserturret
+firearm -> piercing
+grenade -> clustergrenade
+
+# --- explosives fan-out + shell chain ---
+explosives -> clustergrenade, landmine, rocket_item, shell, exshell, artyshell, exprocket
+shell -> exshell
+exshell -> artyshell
+rocket_item -> exprocket
+radar -> artyshell
+
+# --- outputs (fan-in) ---
+firearm, piercing, flammo, capsule -> ammo_out
+gunturret, laserturret, gate, wall, radar -> turret_out
+grenade, clustergrenade, landmine, exprocket, artyshell -> explosive_out

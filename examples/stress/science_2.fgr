@@ -1,0 +1,58 @@
+# science_2: blue (chemical) science with a deep chemical sub-tree, plus a
+# battery byproduct line that also taps the sulfuric-acid pipe to a tank.
+#   blue    = chemical-science-pack = advanced-circuit + engine-unit + sulfur
+#   acid    = sulfuric-acid (chem)  = water + iron-plate + sulfur
+#   battery = battery (chem)        = sulfuric-acid + iron-plate + copper-plate
+
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+fluid petroleum_gas : petroleum-gas
+fluid water : water
+
+furnace steel : steel-plate
+chemical plastic : plastic-bar
+chemical sulfur : sulfur
+chemical acid : sulfuric-acid
+chemical battery : battery
+
+assembler gear : iron-gear-wheel
+assembler pipe_part : pipe
+assembler engine : engine-unit
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red_chip : advanced-circuit
+assembler bluesci : chemical-science-pack
+
+output blue_out
+output battery_out
+output acid_tank
+
+# raw distribution
+iron -> gear, steel, pipe_part, green, acid, battery
+copper -> cable, battery
+coal -> plastic
+
+# fluids by pipe
+petroleum_gas ~> plastic, sulfur
+water ~> sulfur, acid
+
+# circuits
+cable -> green, red_chip
+green -> red_chip
+plastic -> red_chip
+
+# engine
+gear -> engine
+steel -> engine
+pipe_part -> engine
+
+# chemical chain
+sulfur -> bluesci, acid
+acid ~> battery, acid_tank
+
+# science + byproduct
+engine -> bluesci
+red_chip -> bluesci
+battery -> battery_out
+bluesci -> blue_out

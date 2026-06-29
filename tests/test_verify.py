@@ -5,11 +5,11 @@ from pathlib import Path
 
 from fgr.blueprint import to_blueprint_string
 from fgr.dsl import parse
-from fgr.ir import EAST, WEST
+from fgr.ir import EAST
 from fgr.layout import BELT, INSERTER, compile_graph
 from fgr.verify import verify
 
-EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
+EXAMPLES = Path(__file__).resolve().parents[1] / "examples" / "basic"
 
 
 def _load(name):

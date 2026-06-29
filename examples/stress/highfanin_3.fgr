@@ -1,0 +1,44 @@
+# Production science pack: electric-engine-unit + electric-furnace.
+# Two furnaces (steel-plate, stone-brick) and two chemicals (plastic-bar, electric-engine-unit).
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+input stone : stone
+fluid petrol : petroleum-gas
+fluid lube : lubricant
+furnace steel : steel-plate
+furnace brick : stone-brick
+assembler cable : copper-cable
+assembler gear : iron-gear-wheel
+assembler pipe_part : pipe
+chemical plastic : plastic-bar
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+assembler engine : engine-unit
+assembler eengine : electric-engine-unit
+assembler efurnace : electric-furnace
+assembler prod_sci : production-science-pack
+output sci_out
+# raw distribution / smelting
+iron -> steel, gear, pipe_part, green
+copper -> cable
+coal -> plastic
+stone -> brick
+# fluids
+petrol ~> plastic
+lube ~> eengine
+# circuits
+cable -> green, red
+plastic -> red
+green -> red, eengine
+red -> efurnace
+# engine subtree
+gear -> engine
+pipe_part -> engine
+steel -> engine, efurnace
+engine -> eengine
+brick -> efurnace
+# convergence
+eengine -> prod_sci
+efurnace -> prod_sci
+prod_sci -> sci_out

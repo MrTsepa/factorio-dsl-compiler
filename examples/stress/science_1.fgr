@@ -1,0 +1,62 @@
+# science_1: the grand red + green + blue (chemical) science complex.
+# Shares the gear/cable/green-chip bus across all three packs. Plastic and
+# sulfur come from chemical plants (fluids); steel from a furnace.
+#   red   = automation-science-pack = copper-plate + iron-gear-wheel
+#   green = logistic-science-pack   = inserter + transport-belt
+#   blue  = chemical-science-pack   = advanced-circuit + engine-unit + sulfur
+
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+fluid petroleum_gas : petroleum-gas
+fluid water : water
+
+furnace steel : steel-plate
+chemical plastic : plastic-bar
+chemical sulfur : sulfur
+
+assembler gear : iron-gear-wheel
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red_chip : advanced-circuit
+assembler pipe_part : pipe
+assembler engine : engine-unit
+assembler arm : inserter
+assembler belt : transport-belt
+assembler redsci : automation-science-pack
+assembler greensci : logistic-science-pack
+assembler bluesci : chemical-science-pack
+
+output red_out
+output green_out
+output blue_out
+
+# raw distribution
+iron -> gear, green, steel, pipe_part, arm, belt
+copper -> cable, redsci
+coal -> plastic
+
+# fluids by pipe
+petroleum_gas ~> plastic, sulfur
+water ~> sulfur
+
+# circuits bus
+cable -> green, red_chip
+green -> red_chip, arm
+plastic -> red_chip
+
+# engines
+gear -> engine, arm, belt, redsci
+steel -> engine
+pipe_part -> engine
+
+# final science assembly
+engine -> bluesci
+red_chip -> bluesci
+sulfur -> bluesci
+arm -> greensci
+belt -> greensci
+
+redsci -> red_out
+greensci -> green_out
+bluesci -> blue_out

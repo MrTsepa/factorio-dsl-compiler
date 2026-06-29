@@ -1,0 +1,93 @@
+# scale_2: all-science megafactory (6 science packs).
+# Heavy fan-in: many intermediates merge into each pack, then all packs
+# merge onto one belt into the lab. Some fluids for chips/acid/lube.
+
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+input stone : stone
+fluid water : water
+fluid petroleum : petroleum-gas
+fluid lube : lubricant
+
+furnace steel : steel-plate
+furnace brick : stone-brick
+
+chemical plastic : plastic-bar
+chemical sulfur : sulfur
+chemical acid : sulfuric-acid
+assembler procunit : processing-unit
+chemical battery : battery
+assembler eengine : electric-engine-unit
+
+assembler gear : iron-gear-wheel
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+assembler ironstick : iron-stick
+assembler pipe_part : pipe
+assembler engine : engine-unit
+assembler belt : transport-belt
+assembler inserter : inserter
+assembler firearm : firearm-magazine
+assembler piercing : piercing-rounds-magazine
+assembler grenade : grenade
+assembler wall : stone-wall
+assembler rail : rail
+assembler prodmod : productivity-module
+assembler efurnace : electric-furnace
+assembler lds : low-density-structure
+assembler frame : flying-robot-frame
+assembler redpack : automation-science-pack
+assembler greenpack : logistic-science-pack
+assembler milpack : military-science-pack
+assembler bluepack : chemical-science-pack
+assembler prodpack : production-science-pack
+assembler utilpack : utility-science-pack
+
+output lab
+
+# --- fluids ---
+petroleum ~> plastic, sulfur
+water ~> sulfur, acid
+lube ~> eengine
+acid ~> battery, procunit
+
+# --- base item distribution ---
+iron -> steel, gear, ironstick, pipe_part, green, firearm, grenade, acid, battery
+copper -> cable, battery, redpack
+coal -> plastic, grenade
+stone -> brick, rail
+
+# --- electronics ---
+cable -> green, red
+green -> red, inserter, procunit, eengine, frame, prodmod
+plastic -> red
+red -> procunit, prodmod, bluepack
+sulfur -> acid, bluepack
+
+# --- mechanicals ---
+gear -> belt, inserter, engine, redpack
+ironstick -> rail
+pipe_part -> engine
+steel -> engine, efurnace, lds, frame, piercing, rail
+brick -> efurnace, wall
+engine -> eengine, bluepack
+firearm -> piercing
+battery -> frame
+eengine -> frame
+
+# --- sub-assemblies feeding packs ---
+procunit -> utilpack
+lds -> utilpack
+frame -> utilpack
+prodmod -> prodpack
+efurnace -> prodpack
+rail -> prodpack
+
+# --- science pack fan-in (merges) ---
+inserter, belt -> greenpack
+piercing, grenade, wall -> milpack
+
+# --- all packs merge onto one belt into the lab ---
+redpack, greenpack, milpack, bluepack, prodpack, utilpack -> lab

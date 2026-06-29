@@ -1,0 +1,59 @@
+# deepchain_1: copper electronics climbing module tiers into production science.
+# Deep spine (depth 10): copper-ore -> ... -> production-science-pack.
+# A long cross-column rail + electric-furnace sub-chain feeds the final assembler.
+
+input     copper_ore   : copper-ore
+input     iron         : iron-plate
+input     plastic      : plastic-bar
+input     stone        : stone
+fluid     acid         : sulfuric-acid
+
+furnace   copper_plate : copper-plate
+assembler cable        : copper-cable
+assembler green        : electronic-circuit
+assembler red          : advanced-circuit
+assembler  blue         : processing-unit
+assembler prod1        : productivity-module
+assembler prod2        : productivity-module-2
+assembler prod3        : productivity-module-3
+assembler prod_sci     : production-science-pack
+output    sci_out
+
+# rail sub-chain
+furnace   steel        : steel-plate
+assembler stick        : iron-stick
+assembler rail         : rail
+# electric-furnace sub-chain
+furnace   brick        : stone-brick
+assembler efurnace     : electric-furnace
+
+# --- main spine (depth 10) ---
+copper_ore -> copper_plate -> cable -> green -> red -> blue -> prod2 -> prod3 -> prod_sci -> sci_out
+
+# --- circuit ingredient branches ---
+iron -> green
+plastic -> red
+acid ~> blue
+
+# --- module tier ingredients ---
+green -> prod1
+red -> prod1
+prod1 -> prod2
+red -> prod2
+blue -> prod3
+red -> prod3
+
+# --- rail feeds production science ---
+iron -> steel
+iron -> stick
+stone -> rail
+stick -> rail
+steel -> rail
+rail -> prod_sci
+
+# --- electric furnace feeds production science ---
+stone -> brick
+steel -> efurnace
+red -> efurnace
+brick -> efurnace
+efurnace -> prod_sci

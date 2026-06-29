@@ -1,0 +1,57 @@
+# Satellite factory: six subassemblies converge, several gated behind fluids.
+# Processing units AND batteries (for accumulators) need sulfuric acid (FLUID);
+# rocket fuel is solid fuel cracked from light oil (FLUID); plastic for advanced
+# circuits comes from petroleum gas (FLUID). A genuinely wide reconvergent DAG.
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+input sulfur : sulfur
+fluid water : water
+fluid petroleum : petroleum-gas
+fluid light : light-oil
+furnace steel : steel-plate
+chemical acid : sulfuric-acid
+chemical plastic : plastic-bar
+chemical solid : solid-fuel-from-light-oil
+chemical battery : battery
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+assembler blue : processing-unit
+assembler accumulator : accumulator
+assembler solar : solar-panel
+assembler lds : low-density-structure
+assembler rfuel : rocket-fuel
+assembler satellite : low-density-structure
+output satellite_out
+
+iron -> steel
+water ~> acid
+sulfur -> acid
+iron -> acid
+petroleum ~> plastic
+coal -> plastic
+light ~> solid
+copper -> cable
+cable -> green, red
+iron -> green
+plastic -> red
+green -> red, blue
+red -> blue
+acid ~> blue, battery
+iron -> battery
+copper -> battery
+battery -> accumulator
+iron -> accumulator
+steel -> solar, lds
+green -> solar
+copper -> solar, lds
+plastic -> lds
+solid -> rfuel
+green -> satellite
+blue -> satellite
+accumulator -> satellite
+solar -> satellite
+lds -> satellite
+rfuel -> satellite
+satellite -> satellite_out

@@ -1,0 +1,85 @@
+# scale_1: rocket-part megafactory.
+# Oil refining -> plastics/sulfur/lube/fuel, a full electronics tower,
+# smelting, mechanicals, and final rocket-part + robot assembly.
+# Deep (8 layers) + reconvergent + fluid branching.
+
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+input stone : stone
+fluid crude : crude-oil
+fluid water : water
+
+furnace steel : steel-plate
+furnace brick : stone-brick
+
+chemical oil : lubricant
+chemical lube : lubricant
+chemical plastic : plastic-bar
+chemical sulfur : sulfur
+chemical solidfuel : solid-fuel-from-light-oil
+chemical acid : sulfuric-acid
+assembler rocketfuel : rocket-fuel
+chemical battery : battery
+assembler procunit : processing-unit
+assembler eengine : electric-engine-unit
+
+assembler cable : copper-cable
+assembler gear : iron-gear-wheel
+assembler pipe_part : pipe
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+assembler engine : engine-unit
+assembler efurnace : electric-furnace
+assembler speedmod : speed-module
+assembler lds : low-density-structure
+assembler rcu : engine-unit
+assembler frame : flying-robot-frame
+assembler consrobot : construction-robot
+assembler rocketpart : low-density-structure
+
+output out
+output bots_out
+
+# --- fluids (pipes) ---
+crude ~> oil
+water ~> oil, sulfur, acid
+oil ~> lube, plastic, sulfur, solidfuel, rocketfuel
+lube ~> eengine
+acid ~> battery, procunit
+
+# --- smelting + base item distribution ---
+iron -> steel, gear, pipe_part, green, acid, battery
+copper -> cable, battery, lds
+coal -> plastic
+stone -> brick
+
+# --- electronics tower ---
+cable -> green, red
+green -> red, procunit, eengine, speedmod, frame, consrobot
+plastic -> red, lds
+red -> procunit, efurnace, speedmod
+sulfur -> acid
+
+# --- mechanicals ---
+steel -> engine, efurnace, lds, frame
+gear -> engine
+pipe_part -> engine
+brick -> efurnace
+engine -> eengine
+solidfuel -> rocketfuel
+
+# --- top assemblies ---
+procunit -> rcu
+speedmod -> rcu
+battery -> frame
+eengine -> frame
+rcu -> rocketpart
+lds -> rocketpart
+rocketfuel -> rocketpart
+frame -> consrobot
+
+# --- outputs ---
+rocketpart -> out
+consrobot -> bots_out
+efurnace -> bots_out

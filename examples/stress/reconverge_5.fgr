@@ -1,0 +1,41 @@
+# Rocket components & modules: electronic (green) & advanced (red) circuits and
+# processing-units (blue) are shared across speed/productivity modules and the
+# rocket-control-unit at many depths. solid-fuel & processing-unit are fluid
+# recipes (light-oil / sulfuric-acid). Everything reconverges into rocket-part.
+input iron : iron-plate
+input copper : copper-plate
+input plastic : plastic-bar
+fluid acid : sulfuric-acid
+fluid light_oil : light-oil
+furnace steel : steel-plate
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+assembler blue : processing-unit
+assembler speed : speed-module
+assembler prod : productivity-module
+assembler lds : low-density-structure
+chemical solid : solid-fuel-from-light-oil
+assembler rfuel : rocket-fuel
+assembler rcu : engine-unit
+assembler rpart : low-density-structure
+output rocket
+output modules
+
+copper -> cable, lds
+iron -> green, steel
+cable -> green, red
+plastic -> red, lds
+green -> red, blue, speed, prod
+red -> blue, speed, prod, rcu
+blue -> rcu
+speed -> rcu
+steel -> lds
+light_oil ~> solid
+solid -> rfuel
+lds -> rpart
+rcu -> rpart
+rfuel -> rpart
+rpart -> rocket
+acid ~> blue
+speed, prod -> modules

@@ -1,0 +1,38 @@
+# Flying-robot-frame line: two independent fluid subsystems converge.
+# Lubricant (from heavy-oil) is piped into the electric-engine chemical plant;
+# sulfuric acid (sulfur + iron + water) is piped into the battery chemical plant.
+# Steel is smelted in a furnace. Deep reconvergent DAG into the final frame.
+input iron : iron-plate
+input copper : copper-plate
+input sulfur : sulfur
+fluid heavy : heavy-oil
+fluid water : water
+furnace steel : steel-plate
+chemical lube : lubricant
+chemical acid : sulfuric-acid
+assembler gear : iron-gear-wheel
+assembler pipe_part : pipe
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler engine : engine-unit
+assembler eengine : electric-engine-unit
+chemical battery : battery
+assembler frame : flying-robot-frame
+output frame_out
+
+heavy ~> lube
+water ~> acid
+iron -> steel, gear, pipe_part, green, acid, battery
+sulfur -> acid
+copper -> cable, battery
+cable -> green
+gear -> engine
+pipe_part -> engine
+steel -> engine, frame
+engine -> eengine
+green -> eengine, frame
+lube ~> eengine
+acid ~> battery
+eengine -> frame
+battery -> frame
+frame -> frame_out

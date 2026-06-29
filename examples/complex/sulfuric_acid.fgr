@@ -1,0 +1,15 @@
+# Sulfuric acid: a chemical-plant takes water (FLUID, ~>) + iron + sulfur (items).
+# Steel is smelted in a FURNACE. Items go to a chest, acid is piped to a tank.
+input iron : iron-plate
+input sulfur : sulfur
+furnace steel : steel-plate
+fluid water : water
+chemical acid : sulfuric-acid
+output steel_out
+output acid_tank
+iron -> steel
+iron -> acid
+sulfur -> acid
+water ~> acid
+steel -> steel_out
+acid ~> acid_tank

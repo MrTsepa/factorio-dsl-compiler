@@ -49,9 +49,12 @@ def delta_to_dir(dx: int, dy: int) -> int:
 class NodeKind(Enum):
     """The DSL primitives that become entities."""
 
-    INPUT = "input"        # an input chest, stocked with one item
+    INPUT = "input"          # an input chest, stocked with one item
     ASSEMBLER = "assembler"  # crafts a recipe
-    OUTPUT = "output"      # an output chest, collects items
+    FURNACE = "furnace"      # smelts an item (steel-plate, stone-brick, ...)
+    CHEMICAL = "chemical"    # a chemical plant: recipes with fluid ingredients
+    FLUID = "fluid"          # an infinite fluid source (water, acid, oil, ...)
+    OUTPUT = "output"        # an output chest, collects items
 
 
 @dataclass(frozen=True)
@@ -70,10 +73,12 @@ class Node:
 
 @dataclass(frozen=True)
 class Edge:
-    """A "belt lane": a request to carry items from ``src`` to ``dst``."""
+    """A lane: a request to carry stuff from ``src`` to ``dst``. ``fluid`` lanes go
+    by pipe (``A ~> B``); item lanes go by belt+inserter (``A -> B``)."""
 
     src: str
     dst: str
+    fluid: bool = False
 
 
 @dataclass
@@ -99,8 +104,8 @@ class Graph:
             raise ValueError(f"duplicate node name: {node.name!r}")
         self.nodes[node.name] = node
 
-    def add_edge(self, src: str, dst: str) -> None:
-        self.edges.append(Edge(src, dst))
+    def add_edge(self, src: str, dst: str, fluid: bool = False) -> None:
+        self.edges.append(Edge(src, dst, fluid))
 
     def successors(self, name: str) -> list[str]:
         return [e.dst for e in self.edges if e.src == name]

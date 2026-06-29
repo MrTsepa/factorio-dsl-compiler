@@ -1,0 +1,39 @@
+# Flying robot frame, deep: sulfuric-acid synthesized from sulfur (petroleum-gas + water).
+# Four-ingredient frame; chemical chain sulfur -> acid -> battery; fan-in at depth.
+input iron : iron-plate
+input copper : copper-plate
+fluid water : water
+fluid petrol : petroleum-gas
+fluid lube : lubricant
+furnace steel : steel-plate
+assembler cable : copper-cable
+assembler gear : iron-gear-wheel
+assembler pipe_part : pipe
+assembler green : electronic-circuit
+assembler engine : engine-unit
+chemical sulfur : sulfur
+chemical acid : sulfuric-acid
+chemical battery : battery
+assembler eengine : electric-engine-unit
+assembler frame : flying-robot-frame
+output frame_out
+# raw item distribution
+iron -> steel, gear, pipe_part, green, acid, battery
+copper -> cable, battery
+cable -> green
+# fluids feed the chemical chain
+water ~> sulfur, acid
+petrol ~> sulfur
+sulfur -> acid
+acid ~> battery
+lube ~> eengine
+# engine subtree
+gear -> engine
+pipe_part -> engine
+steel -> engine, frame
+engine -> eengine
+green -> eengine, frame
+# deep convergence onto the frame (4 ingredients)
+eengine -> frame
+battery -> frame
+frame -> frame_out

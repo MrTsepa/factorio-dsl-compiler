@@ -1,0 +1,32 @@
+# Rocket feedstock: low-density-structure (steel + copper + plastic) and rocket
+# fuel (solid fuel cracked from light oil). Plastic needs petroleum gas; solid
+# fuel is a chemical-plant recipe consuming light oil (a FLUID). Surplus light
+# oil is also cracked to petroleum gas and drained to a tank.
+input coal : coal
+input copper : copper-plate
+input iron : iron-plate
+fluid light : light-oil
+fluid petroleum : petroleum-gas
+fluid water : water
+furnace steel : steel-plate
+chemical plastic : plastic-bar
+chemical solid : solid-fuel-from-light-oil
+chemical crack_light : light-oil-cracking
+assembler lds : low-density-structure
+assembler rfuel : rocket-fuel
+output lds_out
+output rfuel_out
+output petroleum_tank
+
+iron -> steel
+petroleum ~> plastic
+coal -> plastic
+light ~> solid, crack_light
+water ~> crack_light
+crack_light ~> petroleum_tank
+steel -> lds
+copper -> lds
+plastic -> lds
+lds -> lds_out
+solid -> rfuel
+rfuel -> rfuel_out

@@ -1,0 +1,39 @@
+# Electric infrastructure / mall: electronic-circuit, steel, and gears feed a
+# wide set of machines (solar panels, drills, assemblers, electric-furnace,
+# substations) at varied depths. battery (sulfuric-acid, fluid) reconverges
+# into accumulators. advanced-circuit fans out to substations & electric-furnace.
+input iron : iron-plate
+input copper : copper-plate
+input stone_brick : stone-brick
+input plastic : plastic-bar
+fluid acid : sulfuric-acid
+furnace steel : steel-plate
+assembler gear : iron-gear-wheel
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+chemical battery : battery
+assembler solar : solar-panel
+assembler accu : accumulator
+assembler substation : substation
+assembler drill : electric-mining-drill
+assembler asm1 : assembling-machine-1
+assembler asm2 : assembling-machine-2
+assembler efurnace : electric-furnace
+output machines
+output power
+
+iron -> gear, green, accu, asm1, battery
+copper -> cable, solar, battery
+cable -> green, red
+plastic -> red
+green -> red, solar, substation, drill, asm1, asm2
+red -> substation, efurnace
+steel -> solar, substation, drill, asm1, asm2, efurnace
+gear -> drill, asm1, asm2
+stone_brick -> efurnace
+battery -> accu
+acid ~> battery
+asm1 -> asm2
+solar, substation, accu -> power
+drill, asm1, asm2, efurnace -> machines

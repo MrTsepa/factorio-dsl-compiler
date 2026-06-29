@@ -1,0 +1,21 @@
+# Automation + logistic science, sharing gears/circuits across many depths.
+input iron : iron-plate
+input copper : copper-plate
+assembler gear : iron-gear-wheel
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler belt : transport-belt
+assembler arm : inserter
+assembler redsci : automation-science-pack
+assembler greensci : logistic-science-pack
+output red_out
+output green_out
+iron -> gear, green, belt, arm
+copper -> cable, redsci
+cable -> green
+green -> arm
+gear -> belt, arm, redsci
+belt -> greensci
+arm -> greensci
+redsci -> red_out
+greensci -> green_out

@@ -1,0 +1,45 @@
+# Rocket part: low-density-structure + rocket-control-unit + rocket-fuel.
+# Three deep branches converge; rocket-control-unit hides processing-unit + speed-module.
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+fluid petrol : petroleum-gas
+fluid acid : sulfuric-acid
+fluid light : light-oil
+furnace steel : steel-plate
+assembler cable : copper-cable
+chemical plastic : plastic-bar
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+assembler blue : processing-unit
+assembler speed : speed-module
+assembler rcu : engine-unit
+assembler lds : low-density-structure
+chemical solid : solid-fuel-from-light-oil
+assembler rfuel : rocket-fuel
+assembler rpart : low-density-structure
+output rpart_out
+# raw distribution
+iron -> steel, green
+copper -> cable, lds
+coal -> plastic
+# fluids
+petrol ~> plastic
+acid ~> blue
+light ~> solid, rfuel
+# circuits and plastic
+cable -> green, red
+plastic -> red, lds
+green -> red, blue, speed
+red -> blue, speed
+steel -> lds
+# rocket-control-unit branch
+blue -> rcu
+speed -> rcu
+# rocket-fuel branch
+solid -> rfuel
+# triple convergence at the rocket part
+lds -> rpart
+rcu -> rpart
+rfuel -> rpart
+rpart -> rpart_out

@@ -32,8 +32,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .ir import DIR_DELTA, EAST, NORTH, SOUTH, WEST, Graph, Node, NodeKind
-from .layout import CHEST_INPUT, CHEST_OUTPUT, INSERTER, Layout, PlacedEntity, SIZE
+from .ir import DIR_DELTA, EAST, NORTH, OPPOSITE, SOUTH, WEST, Graph, Node, NodeKind
+from .layout import (ASSEMBLER, CHEMICAL, CHEST_INPUT, CHEST_OUTPUT, FURNACE, INSERTER,
+                     Layout, PlacedEntity, SIZE, _fluid_connections)
 from .verify import verify
 
 CARDINALS = [NORTH, EAST, SOUTH, WEST]
@@ -73,29 +74,34 @@ def _rotate_cw(v, quarter_turns: int) -> tuple[float, float]:
     return (x, y)
 
 
-def _load_proto(proto: str, profile: str, dumper) -> dict:
-    """Return a prototype's dumped JSON, generating the dump on demand if needed."""
+def _load_dump(name: str, kind: str, profile: str, dumper) -> dict:
+    """Return a dumped prototype's JSON (kind = 'entity' | 'recipe' | ...), generating
+    the dump on demand if needed."""
     ddir = _dump_dir(profile)
-    pattern = str(ddir / f"{profile} entity {proto} *.json")
+    pattern = str(ddir / f"{profile} {kind} {name} *.json")
     matches = sorted(glob.glob(pattern))
     if not matches and dumper is not None:
-        dumper(proto)
+        dumper(name, kind)
         matches = sorted(glob.glob(pattern))
     if not matches:
         raise FbsrUnavailable(
-            f"no prototype dump for {proto!r} in {ddir} and could not generate one")
+            f"no {kind} dump for {name!r} in {ddir} and could not generate one")
     return json.load(open(matches[-1]))  # newest (e.g. highest version) wins
 
 
+def _load_proto(proto: str, profile: str, dumper) -> dict:
+    return _load_dump(proto, "entity", profile, dumper)
+
+
 def _fbsr_dumper():
-    """A callback that runs `fbsr.sh dump-entity <proto>` to create missing dumps."""
+    """A callback that runs `fbsr.sh dump-<kind> <name>` to create missing dumps."""
     from .render import fbsr_script
     script = fbsr_script()
     if not script.exists():
         return None
 
-    def dump(proto: str) -> None:
-        subprocess.run(["bash", str(script), "dump-entity", proto],
+    def dump(name: str, kind: str = "entity") -> None:
+        subprocess.run(["bash", str(script), f"dump-{kind}", name],
                        capture_output=True, text=True, timeout=120)
 
     return dump
@@ -165,7 +171,91 @@ def validate(profile: str = "vanilla", dumper="auto") -> list[Check]:
             foot_bad.append(f"{proto}: real {w}x{h} != SIZE {SIZE[proto]}")
     checks.append(Check("entity footprints match the SIZE table", not foot_bad,
                         f"checked {', '.join(PROTOS)}" if not foot_bad else "; ".join(foot_bad)))
+
+    # --- pipe-to-ground: its `direction` is the OPEN mouth; the underground side is the
+    # opposite. (The compiler emits entrance=opposite-of-flow, exit=flow on this basis;
+    # getting it backwards renders every tunnel reversed -- a real bug we hit.) ---
+    ptg = _load_proto("pipe-to-ground", profile, dumper)
+    conns = _fluid_box_connections(ptg)
+    normal = [c for c in conns if c[3] != "underground"]
+    under = [c for c in conns if c[3] == "underground"]
+    ok = bool(normal and under) and under[0][2] == OPPOSITE[normal[0][2]]
+    checks.append(Check(
+        "pipe-to-ground tunnels opposite its open mouth", ok,
+        f"open dir={normal[0][2] if normal else '?'}, underground dir={under[0][2] if under else '?'}"
+        if ok else f"normal={normal}, underground={under}"))
+
+    # --- machine fluid boxes match Factorio data (rotation-aware model). Both the
+    # chemical plant and the assembler (crafting-with-fluid recipes) carry fluid. ---
+    for proto_name, model in (("chemical-plant", CHEMICAL), ("assembling-machine-2", ASSEMBLER)):
+        real = set()
+        for pt, pos, dr, ct in _fluid_box_connections(_load_proto(proto_name, profile, dumper)):
+            if ct == "underground":
+                continue
+            ext = (1 + pos[0] + DIR_DELTA[dr][0], 1 + pos[1] + DIR_DELTA[dr][1])  # center (1,1) for 3x3
+            real.add((ext, "input" if pt == "input" else "output"))
+        mine = set(_fluid_connections(model, 0, 0, NORTH))
+        checks.append(Check(f"{proto_name} fluid boxes match Factorio data", real == mine,
+                            f"{sorted(mine)}" if real == mine else f"real {sorted(real)} != model {sorted(mine)}"))
     return checks
+
+
+# Which machine the DSL maps each recipe-bearing node kind to.
+_MACHINE_PROTO = {NodeKind.ASSEMBLER: ASSEMBLER, NodeKind.CHEMICAL: CHEMICAL,
+                  NodeKind.FURNACE: FURNACE}
+
+
+def check_recipes(graph: Graph, profile: str = "vanilla", dumper="auto") -> list[Check]:
+    """Spec-level check (NOT the layout): is each node's recipe actually craftable by the
+    machine its DSL kind picks? Done NATIVELY from Factorio data -- a recipe's `category`
+    must be in the machine's `crafting_categories` (no hard-coded recipe table) -- so e.g.
+    a chemical-plant recipe placed on an `assembler` (or vice-versa) is flagged. Raises
+    FbsrUnavailable if the game data can't be loaded at all (caller should treat as skip)."""
+    if dumper == "auto":
+        dumper = _fbsr_dumper()
+    machine_cats: dict[str, set] = {}
+    bad, unknown = [], []
+    for name, node in graph.nodes.items():
+        proto = _MACHINE_PROTO.get(node.kind)
+        if proto is None or not node.recipe:
+            continue
+        if proto not in machine_cats:                       # may raise FbsrUnavailable (no data)
+            machine_cats[proto] = set(_load_proto(proto, profile, dumper).get("crafting_categories", []))
+        try:
+            cat = _load_dump(node.recipe, "recipe", profile, dumper).get("category", "crafting")
+        except FbsrUnavailable:
+            unknown.append(f"{name}: recipe {node.recipe!r} not in {profile} data")
+            continue
+        if cat not in machine_cats[proto]:
+            bad.append(f"{name}: {node.kind.value!r} can't craft {node.recipe!r} "
+                       f"(category {cat!r} not in {sorted(machine_cats[proto])})")
+    checks = [Check("every recipe is craftable by its machine (category vs crafting_categories)",
+                    not bad, "" if not bad else "; ".join(bad))]
+    if unknown:
+        checks.append(Check("every recipe exists in Factorio data", False, "; ".join(unknown)))
+    return checks
+
+
+def _fluid_box_connections(dump):
+    """Every fluid-box pipe connection in a prototype dump as
+    (production_type, position, direction, connection_type)."""
+    out = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            if "pipe_connections" in o:
+                pt = o.get("production_type")
+                for c in o["pipe_connections"]:
+                    out.append((pt, tuple(c.get("position", [0, 0])),
+                                c.get("direction", 0), c.get("connection_type", "normal")))
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(dump)
+    return out
 
 
 def format_checks(checks: list[Check]) -> str:

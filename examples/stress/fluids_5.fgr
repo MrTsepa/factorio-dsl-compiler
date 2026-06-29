@@ -1,0 +1,27 @@
+# Sulfur economy: petroleum + water -> sulfur, which fans out (as an item belt)
+# to sulfuric acid, explosives, and a chest. Sulfuric acid is then piped to
+# batteries and to a holding tank. Three chemical plants share the water supply;
+# petroleum gas and water are infinite fluid sources.
+input coal : coal
+input iron : iron-plate
+input copper : copper-plate
+fluid petroleum : petroleum-gas
+fluid water : water
+chemical make_sulfur : sulfur
+chemical acid : sulfuric-acid
+chemical explosives : explosives
+chemical battery : battery
+output sulfur_out
+output explosives_out
+output battery_out
+output acid_tank
+
+petroleum ~> make_sulfur
+water ~> make_sulfur, acid, explosives
+make_sulfur -> sulfur_out, acid, explosives
+coal -> explosives
+iron -> acid, battery
+copper -> battery
+acid ~> battery, acid_tank
+explosives -> explosives_out
+battery -> battery_out

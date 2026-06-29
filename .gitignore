@@ -1,11 +1,17 @@
+# tooling / caches
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+.claude/
+
+# generated artifacts (regenerate; not source)
 *.png
-*.bp.txt
 out/
-# generated artifacts (regenerate with scripts/build_report.py; the report embeds
-# every render as base64, so it's large — keep it out of git history)
-report.html
 renders/
+report.html
+
+# ...but DO commit the curated showcase assets (hero renders + a copy of the report).
+# (comments must be on their own line in .gitignore; an inline # is part of the pattern)
+!docs/
+!docs/**

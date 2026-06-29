@@ -1,0 +1,72 @@
+# science_4: blue (chemical) + production science, sharing the advanced-circuit
+# and steel/brick lines. Two furnaces, two chemical plants.
+#   blue       = chemical-science-pack    = advanced-circuit + engine-unit + sulfur
+#   production = production-science-pack   = electric-furnace + productivity-module + rail
+#     electric-furnace     = steel-plate + stone-brick + advanced-circuit
+#     productivity-module  = advanced-circuit + electronic-circuit
+#     rail                 = stone + steel-plate + iron-stick
+
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+input stone : stone
+fluid petroleum_gas : petroleum-gas
+fluid water : water
+
+furnace steel : steel-plate
+furnace brick : stone-brick
+chemical plastic : plastic-bar
+chemical sulfur : sulfur
+
+assembler gear : iron-gear-wheel
+assembler cable : copper-cable
+assembler green_chip : electronic-circuit
+assembler red_chip : advanced-circuit
+assembler pipe_part : pipe
+assembler engine : engine-unit
+assembler iron_stick : iron-stick
+assembler rail : rail
+assembler prod_module : productivity-module
+assembler electric_furnace : electric-furnace
+assembler bluesci : chemical-science-pack
+assembler prodsci : production-science-pack
+
+output blue_out
+output prod_out
+
+# raw distribution
+iron -> gear, green_chip, steel, pipe_part, iron_stick
+copper -> cable
+coal -> plastic
+stone -> brick, rail
+
+# fluids
+petroleum_gas ~> plastic, sulfur
+water ~> sulfur
+
+# circuits
+cable -> green_chip, red_chip
+green_chip -> red_chip, prod_module
+plastic -> red_chip
+red_chip -> bluesci, prod_module, electric_furnace
+
+# smelting fan-out
+steel -> engine, rail, electric_furnace
+brick -> electric_furnace
+
+# engine
+gear -> engine
+pipe_part -> engine
+engine -> bluesci
+sulfur -> bluesci
+
+# rail line
+iron_stick -> rail
+
+# production science assembly
+rail -> prodsci
+prod_module -> prodsci
+electric_furnace -> prodsci
+
+bluesci -> blue_out
+prodsci -> prod_out

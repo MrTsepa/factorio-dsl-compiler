@@ -1,0 +1,28 @@
+# Deep multi-step with smelting (furnace) and fluids (pipes): flying-robot-frame.
+input iron : iron-plate
+input copper : copper-plate
+fluid lube : lubricant
+fluid acid : sulfuric-acid
+furnace steel : steel-plate
+assembler gear : iron-gear-wheel
+assembler pipe_part : pipe
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler engine : engine-unit
+assembler eengine : electric-engine-unit   # crafting-with-fluid (lubricant) -> assembler, not chemical
+chemical battery : battery                  # battery is a chemistry recipe -> chemical plant
+assembler frame : flying-robot-frame
+output frame_out
+iron -> steel, gear, pipe_part, green, battery
+copper -> cable, battery
+cable -> green
+gear -> engine
+pipe_part -> engine
+steel -> engine, frame
+engine -> eengine
+green -> eengine, frame
+lube ~> eengine
+acid ~> battery
+eengine -> frame
+battery -> frame
+frame -> frame_out

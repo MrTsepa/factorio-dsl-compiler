@@ -1,0 +1,31 @@
+# Electronics tower: copper-cable -> green -> red (advanced) -> blue (processing).
+# Plastic comes from a chemical plant (coal item + petroleum-gas FLUID); blue
+# circuits are a chemical recipe needing sulfuric acid (a FLUID) piped in.
+# Sulfuric acid itself is brewed from sulfur + iron + water in a chemical plant.
+input copper : copper-plate
+input iron : iron-plate
+input coal : coal
+input sulfur : sulfur
+fluid petroleum : petroleum-gas
+fluid water : water
+chemical plastic : plastic-bar
+chemical acid : sulfuric-acid
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+assembler blue : processing-unit
+output blue_out
+
+petroleum ~> plastic
+coal -> plastic
+water ~> acid
+iron -> acid
+sulfur -> acid
+copper -> cable
+cable -> green, red
+iron -> green
+plastic -> red
+green -> red, blue
+red -> blue
+acid ~> blue
+blue -> blue_out

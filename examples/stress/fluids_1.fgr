@@ -1,0 +1,29 @@
+# Oil-cracking cascade feeding plastic, sulfur, sulfuric acid and batteries.
+# Fluid cascade: heavy-oil -> light-oil -> petroleum-gas, each step a chemical
+# cracking plant that also consumes water (chemical->chemical FLUID lanes).
+# Petroleum feeds plastic & sulfur; sulfur + water -> sulfuric acid -> batteries.
+input coal : coal
+input iron : iron-plate
+input copper : copper-plate
+fluid heavy : heavy-oil
+fluid water : water
+chemical crack_heavy : heavy-oil-cracking
+chemical crack_light : light-oil-cracking
+chemical plastic : plastic-bar
+chemical make_sulfur : sulfur
+chemical acid : sulfuric-acid
+chemical battery : battery
+output plastic_out
+output battery_out
+
+heavy ~> crack_heavy
+water ~> crack_heavy, crack_light, make_sulfur, acid
+crack_heavy ~> crack_light
+crack_light ~> plastic, make_sulfur
+coal -> plastic
+plastic -> plastic_out
+make_sulfur -> acid
+iron -> acid, battery
+copper -> battery
+acid ~> battery
+battery -> battery_out

@@ -1,0 +1,63 @@
+# scale_3: oil & chemical refinery complex (fluid-heavy).
+# Two parallel refineries, heavy/light cracking, then sulfur/acid/plastic/
+# battery/explosives/rocket-fuel. Lots of branching pipes + fluid tanks.
+
+input coal : coal
+input iron : iron-plate
+input copper : copper-plate
+fluid crude : crude-oil
+fluid water : water
+
+chemical oil1 : lubricant
+chemical oil2 : lubricant
+chemical crackH : heavy-oil-cracking
+chemical crackL : light-oil-cracking
+chemical lube : lubricant
+chemical solid1 : solid-fuel-from-light-oil
+chemical solid2 : solid-fuel-from-light-oil
+chemical plastic : plastic-bar
+chemical sulfur : sulfur
+chemical acid : sulfuric-acid
+chemical explosives : explosives
+chemical battery : battery
+assembler rocketfuel : rocket-fuel
+assembler procunit : processing-unit
+
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+
+output lube_tank
+output acid_tank
+output battery_out
+output chips_out
+output explosives_out
+output fuel_out
+
+# --- fluids (pipes), parallel refineries + cracking ---
+crude ~> oil1, oil2
+water ~> oil1, oil2, crackH, crackL, sulfur, acid, explosives
+oil1 ~> crackH, lube, plastic, sulfur
+oil2 ~> solid1, rocketfuel
+crackH ~> crackL, solid2
+crackL ~> plastic
+lube ~> lube_tank
+acid ~> battery, procunit, acid_tank
+
+# --- item lanes ---
+coal -> plastic, explosives
+iron -> acid, battery, green
+copper -> cable, battery
+cable -> green
+green -> procunit, red
+red -> procunit
+sulfur -> acid, explosives
+solid1 -> rocketfuel
+solid2 -> rocketfuel
+plastic -> red
+
+# --- outputs ---
+battery -> battery_out
+procunit -> chips_out
+explosives -> explosives_out
+rocketfuel -> fuel_out

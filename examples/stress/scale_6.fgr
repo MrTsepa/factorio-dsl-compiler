@@ -1,0 +1,98 @@
+# scale_6: kitchen-sink mega base (~46 nodes).
+# Oil + electronics + mechanicals + robots + rocket parts + nuclear,
+# combining deep chains, wide fan-out, heavy fan-in, and fluid branching.
+
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+input stone : stone
+input uranium : uranium-ore
+fluid crude : crude-oil
+fluid water : water
+
+furnace steel : steel-plate
+furnace brick : stone-brick
+
+chemical oil : lubricant
+chemical lube : lubricant
+chemical plastic : plastic-bar
+chemical sulfur : sulfur
+chemical acid : sulfuric-acid
+chemical battery : battery
+assembler procunit : processing-unit
+assembler eengine : electric-engine-unit
+chemical solidfuel : solid-fuel-from-light-oil
+assembler rocketfuel : rocket-fuel
+chemical explosives : explosives
+
+assembler cable : copper-cable
+assembler gear : iron-gear-wheel
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+assembler pipe_part : pipe
+assembler ironstick : iron-stick
+assembler engine : engine-unit
+assembler frame : flying-robot-frame
+assembler inserter : inserter
+assembler belt : transport-belt
+assembler rail : rail
+assembler lds : low-density-structure
+assembler efurnace : electric-furnace
+assembler speedmod : speed-module
+assembler rcu : engine-unit
+assembler centrifuge_proc : electronic-circuit
+assembler fuelcell : uranium-fuel-cell
+assembler radar : radar
+assembler logirobot : logistic-robot
+assembler consrobot : construction-robot
+assembler rocketpart : low-density-structure
+assembler beacon : beacon
+
+output rocket_out
+output bots_out
+output nuclear_out
+output lube_tank
+
+# --- fluids (pipes) ---
+crude ~> oil
+water ~> oil, sulfur, acid
+oil ~> lube, plastic, sulfur, solidfuel, rocketfuel
+lube ~> eengine, lube_tank
+acid ~> battery, procunit
+
+# --- base item distribution ---
+iron -> steel, gear, green, pipe_part, ironstick, acid, battery, inserter, fuelcell, radar
+copper -> cable, battery, lds
+coal -> plastic, explosives
+stone -> brick, rail
+uranium -> centrifuge_proc
+
+# --- intermediates ---
+steel -> engine, efurnace, lds, frame, rail, beacon
+brick -> efurnace
+cable -> green, red, beacon
+green -> red, procunit, eengine, frame, inserter, speedmod, radar, consrobot, beacon
+plastic -> red
+red -> procunit, speedmod, efurnace, beacon, logirobot
+sulfur -> acid, explosives
+gear -> engine, inserter, belt, rail, radar
+ironstick -> rail
+pipe_part -> engine
+engine -> eengine
+solidfuel -> rocketfuel
+centrifuge_proc -> fuelcell
+
+# --- top assemblies ---
+procunit -> rcu
+speedmod -> rcu, beacon
+battery -> frame
+eengine -> frame
+frame -> logirobot, consrobot
+lds -> rocketpart
+rcu -> rocketpart
+rocketfuel -> rocketpart
+
+# --- outputs (wide fan-in) ---
+rocketpart -> rocket_out
+logirobot, consrobot, inserter, belt, efurnace, beacon, rail -> bots_out
+fuelcell, explosives, radar -> nuclear_out

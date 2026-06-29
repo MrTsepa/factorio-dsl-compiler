@@ -1,0 +1,35 @@
+# Processing-unit mega: full oil chemistry (refining + cracking) feeding plastic/sulfur/acid.
+# Stresses deep fluid (pipe) lanes, fluid merges, and chemical-to-chemical fan-in.
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+fluid crude : crude-oil
+fluid water : water
+assembler cable : copper-cable
+chemical refinery : lubricant
+chemical crack : light-oil-cracking
+chemical plastic : plastic-bar
+chemical sulfur : sulfur
+chemical acid : sulfuric-acid
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+assembler blue : processing-unit
+output chips
+# items
+copper -> cable
+iron -> green, acid
+cable -> green, red
+green -> red, blue
+red -> blue
+coal -> plastic
+# oil refining: crude + water in, fluids out to many consumers
+crude ~> refinery
+water ~> refinery, crack, sulfur, acid
+refinery ~> crack, plastic, sulfur
+crack ~> plastic
+# chemical chain to sulfuric acid
+plastic -> red
+sulfur -> acid
+acid ~> blue
+# final processing unit
+blue -> chips

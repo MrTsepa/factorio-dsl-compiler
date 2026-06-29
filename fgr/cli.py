@@ -1,8 +1,8 @@
 """Command-line front-end: compile a .fgr file to a blueprint, verify, render.
 
-    python -m fgr compile examples/gears.fgr            # -> blueprint string + verify
-    python -m fgr compile examples/gears.fgr -o out.png # also render via FBSR
-    python -m fgr verify  examples/gears.fgr            # just print the verifier report
+    python -m fgr compile examples/basic/gears.fgr            # -> blueprint string + verify
+    python -m fgr compile examples/basic/gears.fgr -o out.png # also render via FBSR
+    python -m fgr verify  examples/basic/gears.fgr            # just print the verifier report
 """
 
 from __future__ import annotations
@@ -24,6 +24,19 @@ def _build(path: str):
     return graph, layout
 
 
+def _recipe_lint(graph):
+    """Print the recipe-vs-machine check (a SPEC check, from live Factorio data).
+    Returns True if all ok, False on a mismatch, None if game data is unavailable."""
+    from .fbsr_validation import FbsrUnavailable, check_recipes, format_checks
+    try:
+        checks = check_recipes(graph)
+    except FbsrUnavailable:
+        return None
+    print("\n## recipe check (recipe category vs machine crafting_categories, from Factorio data)")
+    print(format_checks(checks))
+    return all(c.ok for c in checks)
+
+
 def cmd_compile(args) -> int:
     graph, layout = _build(args.source)
     report = verify(graph, layout)
@@ -33,9 +46,11 @@ def cmd_compile(args) -> int:
           f"{len(layout.entities)} entities")
     print("\n## verification")
     print(report.format())
+    recipes_ok = _recipe_lint(graph)
     print("\n## blueprint string")
     print(bp)
 
+    ok = report.ok and recipes_ok is not False    # recipes_ok None = data unavailable
     if args.bp_out:
         Path(args.bp_out).write_text(bp)
         print(f"\n(blueprint string written to {args.bp_out})")
@@ -46,15 +61,15 @@ def cmd_compile(args) -> int:
             print(f"\n(rendered to {out})")
         except RenderError as exc:
             print(f"\n[render skipped] {exc}", file=sys.stderr)
-            return 0 if report.ok else 2
-    return 0 if report.ok else 2
+    return 0 if ok else 2
 
 
 def cmd_verify(args) -> int:
     graph, layout = _build(args.source)
     report = verify(graph, layout)
     print(report.format())
-    return 0 if report.ok else 2
+    recipes_ok = _recipe_lint(graph)
+    return 0 if report.ok and recipes_ok is not False else 2
 
 
 def cmd_validate_model(args) -> int:

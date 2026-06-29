@@ -1,0 +1,36 @@
+# Electronics megafactory: electronic-circuit (green) is THE shared intermediate,
+# feeding 7 consumers at depths 1..3. copper-cable, iron, and gears all fan out
+# widely; processing-unit (blue) & battery are fluid recipes (sulfuric-acid).
+input iron : iron-plate
+input copper : copper-plate
+input plastic : plastic-bar
+input stone_brick : stone-brick
+fluid acid : sulfuric-acid
+furnace steel : steel-plate
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler gear : iron-gear-wheel
+assembler red : advanced-circuit
+assembler blue : processing-unit
+chemical battery : battery
+assembler arm : inserter
+assembler fast_arm : fast-inserter
+assembler furn : electric-furnace
+assembler lab : lab
+assembler radar : radar
+output chips
+output devices
+
+copper -> cable, battery
+cable -> green, red
+iron -> green, gear, radar, arm, fast_arm, battery, steel
+gear -> arm, lab, radar
+green -> red, blue, arm, fast_arm, furn, lab, radar
+plastic -> red
+red -> blue, furn
+steel -> furn
+stone_brick -> furn
+arm -> fast_arm
+acid ~> blue, battery
+blue, red -> chips
+arm, fast_arm, furn, lab, radar, battery -> devices

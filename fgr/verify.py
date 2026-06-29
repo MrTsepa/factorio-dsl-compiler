@@ -38,11 +38,16 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from .ir import DIR_DELTA, OPPOSITE, Graph, NodeKind
-from .layout import (ASSEMBLER, BELT, CHEST_INPUT, CHEST_OUTPUT, INSERTER,
-                     SPLITTER, UG_MAX_GAP, UNDERGROUND, Layout, PlacedEntity)
+from .layout import (ASSEMBLER, BELT, CHEMICAL, CHEST_INPUT, CHEST_OUTPUT, FLUID_SOURCE,
+                     FURNACE, INSERTER, PIPE, PIPE_TO_GROUND, PIPE_UG_GAP, SPLITTER, TANK,
+                     UG_MAX_GAP, UNDERGROUND, Layout, PlacedEntity, _fluid_connections)
 
-_PROTO_FOR_KIND = {NodeKind.INPUT: CHEST_INPUT, NodeKind.OUTPUT: CHEST_OUTPUT,
-                   NodeKind.ASSEMBLER: ASSEMBLER}
+# An output node is a chest for items but a storage-tank when it receives fluid.
+_PROTO_FOR_KIND = {NodeKind.INPUT: CHEST_INPUT, NodeKind.OUTPUT: {CHEST_OUTPUT, TANK},
+                   NodeKind.ASSEMBLER: ASSEMBLER, NodeKind.FURNACE: FURNACE,
+                   NodeKind.CHEMICAL: CHEMICAL, NodeKind.FLUID: FLUID_SOURCE}
+_RECIPE_KINDS = (NodeKind.ASSEMBLER, NodeKind.CHEMICAL)
+_ITEM_KINDS = (NodeKind.INPUT, NodeKind.FLUID)
 
 
 @dataclass
@@ -110,6 +115,7 @@ def verify(graph: Graph, layout: Layout) -> Report:
     edges_out = _flow_edges(layout, carrier_at, trans_at, report)
     report.lanes_found = _direct_lanes(graph, bodies, body_tiles, edges_out)
     _compare_to_spec(graph, report)
+    _check_fluids(graph, layout, bodies, report)
     return report
 
 
@@ -141,11 +147,13 @@ def _correspondence(graph: Graph, layout: Layout, report: Report) -> dict[str, P
             continue
         ent = ents[0]
         bodies[name] = ent
-        if ent.proto != _PROTO_FOR_KIND[node.kind]:
-            wrong.append(f"{name}: {ent.proto} != {_PROTO_FOR_KIND[node.kind]}")
-        if node.kind is NodeKind.ASSEMBLER and ent.recipe != node.recipe:
+        allowed = _PROTO_FOR_KIND[node.kind]
+        allowed = allowed if isinstance(allowed, set) else {allowed}
+        if ent.proto not in allowed:
+            wrong.append(f"{name}: {ent.proto} not in {sorted(allowed)}")
+        if node.kind in _RECIPE_KINDS and ent.recipe != node.recipe:
             wrong.append(f"{name}: recipe {ent.recipe!r} != {node.recipe!r}")
-        if node.kind is NodeKind.INPUT and ent.item != node.item:
+        if node.kind in _ITEM_KINDS and ent.item != node.item:
             wrong.append(f"{name}: item {ent.item!r} != {node.item!r}")
 
     report.add("every node placed exactly once", not missing,
@@ -249,13 +257,89 @@ def _direct_lanes(graph: Graph, bodies, body_tiles, edges_out) -> set[tuple[str,
 
 
 def _compare_to_spec(graph: Graph, report: Report) -> None:
-    spec = {(e.src, e.dst) for e in graph.edges}
+    spec = {(e.src, e.dst) for e in graph.edges if not e.fluid}   # item lanes only
     found = report.lanes_found
     missing = sorted(spec - found)
     spurious = sorted(found - spec)
-    report.add("every declared lane physically connects", not missing,
+    report.add("every declared belt lane physically connects", not missing,
                "" if not missing else "missing lanes: " +
                ", ".join(f"{a}->{b}" for a, b in missing))
-    report.add("no undeclared lanes", not spurious,
+    report.add("no undeclared belt lanes", not spurious,
                "" if not spurious else "spurious lanes: " +
                ", ".join(f"{a}->{b}" for a, b in spurious))
+
+
+def _check_fluids(graph: Graph, layout: Layout, bodies, report: Report) -> None:
+    """Each `A ~> B` fluid lane must join A's OUTPUT fluid-box to B's INPUT fluid-box
+    through a connected pipe network.
+
+    A pipe must sit on the exact fluid-box external tile to attach (those tiles
+    depend on the body's rotation). Pipes connect by 4-adjacency; a pipe-to-ground
+    joins to its paired opposite-facing pipe-to-ground. A lane passes iff some
+    output-box network of A equals some input-box network of B."""
+    fluid_edges = [e for e in graph.edges if e.fluid]
+    if not fluid_edges:
+        return
+    pipes = {(e.x, e.y): e for e in layout.entities if e.proto in (PIPE, PIPE_TO_GROUND)}
+    parent = {t: t for t in pipes}
+
+    def find(t):
+        while parent[t] != t:
+            parent[t] = parent[parent[t]]
+            t = parent[t]
+        return t
+
+    for t, e in pipes.items():
+        for d in (0, 4, 8, 12):                       # adjacent pipes connect
+            nb = (t[0] + DIR_DELTA[d][0], t[1] + DIR_DELTA[d][1])
+            if nb in pipes:
+                parent[find(t)] = find(nb)
+        if e.proto == PIPE_TO_GROUND:                 # tunnel: join to the nearest paired exit
+            d = e.direction or 0                      # `direction` is the OPEN mouth; the
+            dx, dy = DIR_DELTA[OPPOSITE[d]]           # tunnel runs the OPPOSITE way underground
+            for k in range(1, PIPE_UG_GAP + 1):       # pipes reach farther than belts
+                far = (t[0] + dx * k, t[1] + dy * k)
+                fe = pipes.get(far)
+                if fe is None or fe.proto != PIPE_TO_GROUND:
+                    continue                          # surface pipe above the tunnel: ignore
+                fd = fe.direction or 0
+                if fd == OPPOSITE[d]:                  # partner faces back at us -> tunnel pair
+                    parent[find(t)] = find(far)
+                    break
+                if fd == d:                           # same-axis underground: blocks the line
+                    break                             # (the nearer one claims it; can't jump it)
+                # perpendicular pipe-to-ground: a crossing tunnel, doesn't interfere -> keep scanning
+
+    out_nets, in_nets = {}, {}                         # name -> set of pipe networks at its boxes
+    for name, b in bodies.items():
+        on, inn = set(), set()
+        for tile, flow in _fluid_connections(b.proto, b.x, b.y, b.direction):
+            if tile not in pipes:
+                continue
+            net = find(tile)
+            if flow in ("output", "both"):
+                on.add(net)
+            if flow in ("input", "both"):
+                inn.add(net)
+        out_nets[name], in_nets[name] = on, inn
+
+    bad = []
+    for e in fluid_edges:
+        if not (out_nets.get(e.src) and in_nets.get(e.dst) and out_nets[e.src] & in_nets[e.dst]):
+            bad.append(f"{e.src}~>{e.dst}")
+    report.add("every fluid lane connects at a real fluid-box (pipe network)", not bad,
+               "" if not bad else "unconnected fluid lanes: " + ", ".join(bad))
+
+    # Fluid EXCLUSIVITY: in Factorio a pipe network carries ONE fluid. Tag each
+    # network with the fluid of every source attached to it; if a network gets two
+    # different fluids it's contaminated (the bug the render audit caught that pure
+    # reachability misses).
+    net_fluids: dict = {}
+    for name, b in bodies.items():
+        if b.proto == FLUID_SOURCE and b.item:
+            for tile, _flow in _fluid_connections(b.proto, b.x, b.y, b.direction):
+                if tile in pipes:
+                    net_fluids.setdefault(find(tile), set()).add(b.item)
+    mixed = sorted("+".join(sorted(fl)) for fl in net_fluids.values() if len(fl) > 1)
+    report.add("no fluid mixing (one fluid per pipe network)", not mixed,
+               "" if not mixed else "contaminated networks: " + ", ".join(mixed))

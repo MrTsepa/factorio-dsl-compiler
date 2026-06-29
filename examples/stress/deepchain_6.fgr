@@ -1,0 +1,58 @@
+# deepchain_6: a "build a rocket" progression spine (depth 12) from ore through
+# engines, robot frames, low density structure and a rocket control unit to a
+# rocket part. Fluids (lubricant, light oil) and an electronics branch feed in.
+
+input     iron_ore     : iron-ore
+input     copper       : copper-plate
+input     steel_in     : steel-plate
+input     plastic      : plastic-bar
+fluid     lube         : lubricant
+fluid     light_oil    : light-oil
+fluid     acid         : sulfuric-acid
+
+furnace   iron_plate   : iron-plate
+assembler gear         : iron-gear-wheel
+assembler pipe_part    : pipe
+assembler engine       : engine-unit
+assembler  eengine      : electric-engine-unit
+assembler frame        : flying-robot-frame
+assembler lds          : low-density-structure
+assembler rcu          : engine-unit
+assembler rocket_fuel  : rocket-fuel
+assembler rocket_part  : low-density-structure
+output    parts_out
+
+# electronics branch
+assembler cable        : copper-cable
+assembler green        : electronic-circuit
+assembler red          : advanced-circuit
+assembler  blue         : processing-unit
+# solid fuel branch
+chemical  solid_fuel   : solid-fuel-from-light-oil
+
+# --- the deep spine (depth 12) ---
+iron_ore -> iron_plate -> gear -> pipe_part -> engine -> eengine -> frame -> lds -> rcu -> rocket_fuel -> rocket_part -> parts_out
+
+# --- electric engine: lubricant (fluid) + green circuit ---
+lube ~> eengine
+green -> eengine
+
+# --- electronics branch with long lanes into the spine ---
+copper -> cable -> green -> red -> blue
+plastic -> red
+green -> blue
+acid ~> blue
+blue -> rcu
+
+# --- low density structure ingredients ---
+steel_in -> lds
+copper -> lds
+plastic -> lds
+
+# --- flying robot frame extras ---
+steel_in -> frame
+green -> frame
+
+# --- rocket fuel from solid fuel (light oil -> solid fuel) ---
+light_oil ~> solid_fuel
+solid_fuel -> rocket_fuel

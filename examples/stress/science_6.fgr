@@ -1,0 +1,71 @@
+# science_6: red + green + blue mall with TWO parallel iron buses (merged into the
+# furnace) and a surplus sulfuric-acid tap to a fluid tank.
+#   red   = automation-science-pack = copper-plate + iron-gear-wheel
+#   green = logistic-science-pack   = inserter + transport-belt
+#   blue  = chemical-science-pack   = advanced-circuit + engine-unit + sulfur
+
+input iron_a : iron-plate
+input iron_b : iron-plate
+input copper : copper-plate
+input coal : coal
+fluid petroleum_gas : petroleum-gas
+fluid water : water
+
+furnace steel : steel-plate
+chemical plastic : plastic-bar
+chemical sulfur : sulfur
+chemical acid : sulfuric-acid
+
+assembler gear : iron-gear-wheel
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red_chip : advanced-circuit
+assembler pipe_part : pipe
+assembler engine : engine-unit
+assembler arm : inserter
+assembler belt : transport-belt
+assembler redsci : automation-science-pack
+assembler greensci : logistic-science-pack
+assembler bluesci : chemical-science-pack
+
+output red_out
+output green_out
+output blue_out
+output acid_tank
+
+# two iron buses
+iron_a -> gear, green, arm, belt
+iron_b -> pipe_part, acid
+# both iron belts merge into the steel furnace
+iron_a, iron_b -> steel
+
+copper -> cable, redsci
+coal -> plastic
+
+# fluids
+petroleum_gas ~> plastic, sulfur
+water ~> sulfur, acid
+
+# circuits
+cable -> green, red_chip
+green -> red_chip, arm
+plastic -> red_chip
+
+# engines + movement
+gear -> engine, arm, belt, redsci
+steel -> engine
+pipe_part -> engine
+
+# chemical
+sulfur -> bluesci, acid
+acid ~> acid_tank
+
+# science assembly
+engine -> bluesci
+red_chip -> bluesci
+arm -> greensci
+belt -> greensci
+
+redsci -> red_out
+greensci -> green_out
+bluesci -> blue_out

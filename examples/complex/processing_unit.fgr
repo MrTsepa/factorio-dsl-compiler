@@ -1,0 +1,19 @@
+# Deep electronics: copper-plate -> cable -> green -> red -> blue (processing-unit).
+# Reconvergent (cable->green,red; green->red,blue). Sulfuric acid is a FLUID (~>).
+input iron : iron-plate
+input copper : copper-plate
+input plastic : plastic-bar
+fluid acid : sulfuric-acid
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+assembler blue : processing-unit   # processing-unit needs sulfuric-acid (crafting-with-fluid) -> assembler
+output chips
+copper -> cable
+cable -> green, red
+iron -> green
+green -> red, blue
+plastic -> red
+red -> blue
+acid ~> blue
+blue -> chips

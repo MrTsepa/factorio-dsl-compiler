@@ -1,0 +1,44 @@
+# Robot logistics network: electronic-circuit feeds 6 things at depths 1..4;
+# steel & advanced-circuit fan out widely; flying-robot-frame reconverges into
+# construction- and logistic-robots. lubricant & sulfuric-acid are fluids.
+input iron : iron-plate
+input copper : copper-plate
+input plastic : plastic-bar
+fluid lube : lubricant
+fluid acid : sulfuric-acid
+furnace steel : steel-plate
+assembler gear : iron-gear-wheel
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+assembler pipe_part : pipe
+assembler engine : engine-unit
+assembler eengine : electric-engine-unit
+chemical battery : battery
+assembler frame : flying-robot-frame
+assembler crobot : construction-robot
+assembler lrobot : logistic-robot
+assembler chest : steel-chest
+assembler pchest : passive-provider-chest
+assembler roboport : roboport
+output robots
+output network
+
+iron -> gear, green, steel, pipe_part, battery
+copper -> cable, battery
+cable -> green, red
+plastic -> red
+green -> red, eengine, frame, crobot, roboport, pchest
+red -> lrobot, roboport
+steel -> engine, frame, chest, roboport
+gear -> engine
+pipe_part -> engine
+engine -> eengine
+chest -> pchest
+eengine -> frame
+battery -> frame
+frame -> crobot, lrobot
+lube ~> eengine
+acid ~> battery
+crobot, lrobot -> robots
+roboport, pchest -> network

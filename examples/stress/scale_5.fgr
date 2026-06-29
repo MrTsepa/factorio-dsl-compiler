@@ -1,0 +1,84 @@
+# scale_5: production-tower stress (deep linear chains + reconvergence).
+# Three deep parallel chains (assembling machines, speed modules,
+# productivity modules) all reconverging on shared circuit intermediates.
+
+input iron : iron-plate
+input copper : copper-plate
+input coal : coal
+input stone : stone
+fluid water : water
+fluid petroleum : petroleum-gas
+
+furnace steel : steel-plate
+furnace brick : stone-brick
+
+chemical plastic : plastic-bar
+chemical sulfur : sulfur
+chemical acid : sulfuric-acid
+assembler procunit : processing-unit
+
+assembler cable : copper-cable
+assembler green : electronic-circuit
+assembler red : advanced-circuit
+assembler gear : iron-gear-wheel
+assembler am1 : assembling-machine-1
+assembler am2 : assembling-machine-2
+assembler am3 : assembling-machine-3
+assembler speed1 : speed-module
+assembler speed2 : speed-module-2
+assembler speed3 : speed-module-3
+assembler prod1 : productivity-module
+assembler prod2 : productivity-module-2
+assembler prod3 : productivity-module-3
+assembler efficiency1 : efficiency-module
+assembler beacon : beacon
+assembler efurnace : electric-furnace
+assembler substation : substation
+
+output machines_out
+output modules_out
+
+# --- fluids ---
+petroleum ~> plastic, sulfur
+water ~> sulfur, acid
+acid ~> procunit
+
+# --- base item distribution ---
+iron -> steel, gear, green, am1, am2, acid
+copper -> cable, substation
+coal -> plastic
+stone -> brick
+
+# --- circuit core (reconvergence point) ---
+steel -> am2, beacon, efurnace, substation
+brick -> efurnace
+cable -> green, red, beacon, substation
+green -> red, am1, am2, beacon, speed1, prod1, efficiency1, substation
+plastic -> red
+red -> procunit, speed1, speed2, speed3, prod1, prod2, prod3, beacon, efurnace, efficiency1
+sulfur -> acid
+gear -> am1, am2
+procunit -> speed2, speed3, prod2, prod3
+
+# --- deep parallel chains ---
+am1 -> am2
+am2 -> am3
+speed1 -> speed2, am3
+speed2 -> speed3
+prod1 -> prod2
+prod2 -> prod3
+
+# --- outputs ---
+am1 -> machines_out
+am2 -> machines_out
+am3 -> machines_out
+beacon -> machines_out
+efurnace -> machines_out
+substation -> machines_out
+speed1 -> modules_out
+speed2 -> modules_out
+speed3 -> modules_out
+prod1 -> modules_out
+prod2 -> modules_out
+prod3 -> modules_out
+efficiency1 -> modules_out

@@ -1,0 +1,55 @@
+# deepchain_2: a deep FLUID spine. Crude oil is refined then cracked through a
+# string of chemical plants (chemical ~> chemical pipe chain), and the sulfur /
+# acid it yields feed processing units and chemical science.
+
+input     coal       : coal
+input     iron       : iron-plate
+input     copper     : copper-plate
+input     engine_in  : engine-unit
+fluid     crude      : crude-oil
+fluid     water      : water
+
+chemical  refinery     : lubricant
+chemical  heavy_crack  : heavy-oil-cracking
+chemical  light_crack  : light-oil-cracking
+chemical  lube_plant   : lubricant
+chemical  sulfur_plant : sulfur
+chemical  acid_plant   : sulfuric-acid
+chemical  plastic_plant: plastic-bar
+assembler cable        : copper-cable
+assembler green        : electronic-circuit
+assembler red          : advanced-circuit
+assembler  blue         : processing-unit
+assembler chem_sci     : chemical-science-pack
+output    blue_out
+output    sci_out
+output    lube_tank
+
+# --- deep fluid spine: crude -> refine -> crack -> crack -> sulfur -> acid -> blue
+crude ~> refinery
+water ~> refinery
+refinery ~> heavy_crack ~> light_crack
+refinery ~> sulfur_plant
+water ~> sulfur_plant
+sulfur_plant -> acid_plant
+iron -> acid_plant
+water ~> acid_plant
+acid_plant ~> blue
+
+# --- electronics branch into the processing unit ---
+copper -> cable -> green -> red -> blue
+iron -> green
+light_crack ~> plastic_plant
+coal -> plastic_plant
+plastic_plant -> red
+blue -> blue_out
+
+# --- chemical science branch ---
+sulfur_plant -> chem_sci
+red -> chem_sci
+engine_in -> chem_sci
+chem_sci -> sci_out
+
+# --- lubricant side product to a tank ---
+heavy_crack ~> lube_plant
+lube_plant ~> lube_tank
