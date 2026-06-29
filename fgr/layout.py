@@ -462,8 +462,6 @@ def compile_graph(graph: Graph) -> Layout:
                 occ.add(tile)
 
     band_bot = max((b.y + b.size[1] - 1 for b in bodies.values()), default=0)
-    Rp = {p: band_bot + 2 + 3 * i      # spacing 3: 2 free rows between trunks -> clean dives
-          for i, p in enumerate(sorted(producers, key=lambda n: (col[n], cr[n])))}
 
     used_ins: dict[str, set] = {n: set() for n in bodies}
 
@@ -556,6 +554,33 @@ def compile_graph(graph: Graph) -> Layout:
     for e in ch_edges:
         consumers_of.setdefault(e.src, []).append(e)
 
+    # CHANNEL-ROW COLORING: a trunk spans [min..max] of its feed+riser columns. Trunks
+    # whose x-spans don't overlap SHARE a channel row -> the channel collapses from 3 rows
+    # per producer to 3 * (chromatic number), hugely shrinking wide/reconvergent layouts.
+    span = {}
+    for p in producers:
+        xs = [vx_riser[(p, e.dst)] for e in consumers_of[p]] + [vx_feed[p]]
+        span[p] = (min(xs), max(xs))
+    Rp: dict[str, int] = {}
+    row_end: list[int] = []                            # rightmost x occupied in each row
+    for p in sorted(producers, key=lambda n: span[n][0]):
+        lo, hi = span[p]
+        for k in range(len(row_end)):
+            if row_end[k] < lo - 1:                    # free row (1-tile gap) -> reuse
+                Rp[p] = band_bot + 2 + 3 * k
+                row_end[k] = hi
+                break
+        else:
+            Rp[p] = band_bot + 2 + 3 * len(row_end)
+            row_end.append(hi)
+
+    # reserve every riser's tap + start tile up front so risers/feeds don't clobber each
+    # other's connection corridor (two lanes into the same node would otherwise collide).
+    for e in ch_edges:
+        rx = vx_riser[(e.src, e.dst)]
+        occ.add((rx, Rp[e.src] - 1))
+        occ.add((rx, Rp[e.src] - 2))
+
     # --- emit, diving discipline by phase order: trunks, feeds, risers ---
     # 1) trunks (horizontal lanes, one per producer). End each with a 1-tile SOUTH tail
     # into the (free) row below so the terminal belt never faces a foreign lane east of it
@@ -585,9 +610,12 @@ def compile_graph(graph: Graph) -> Layout:
                                 meta={"role": "tap", "edge": (p, c)}))
         occ.add(tap)
         start = (rx, Rp[p] - 2)
-        for anchor, ins, d in _input_slots(bodies[c]):
-            if ins in occ or ins in used_ins[c] or anchor in occ:
-                continue
+        occ.discard(start)                             # our own reserved start
+        cand = [(a, i, d) for a, i, d in _input_slots(bodies[c])
+                if i not in occ and i not in used_ins[c] and a not in occ]
+        done = False
+        # (1) fast deterministic L-route to the first port that lays cleanly
+        for anchor, ins, d in cand:
             occ.discard(anchor)
             pts = [start, anchor] if rx == anchor[0] else [start, (rx, anchor[1]), anchor]
             if _lay_polyline(layout, occ, pts, {"role": "riser", "edge": (p, c)}) is None:
@@ -597,8 +625,30 @@ def compile_graph(graph: Graph) -> Layout:
                                     meta={"role": "in", "edge": (p, c)}))
             occ.add(ins)
             used_ins[c].add(ins)
+            done = True
             break
-        else:
+        # (2) bounded BFS fallback for congested cases: route start -> a port anchor,
+        # free to detour through the open NORTH region above the bodies.
+        if not done:
+            bx_max = max(b.x + b.size[0] for b in bodies.values())
+            by_min = min(b.y for b in bodies.values())
+            bounds = (-2, bx_max + 4, by_min - 8, band_bot + 3 * len(row_end) + 6)
+            for anchor, ins, d in cand:
+                occ.discard(anchor)
+                path = _pipe_path(occ, {start}, anchor, bounds, max_gap=UG_MAX_GAP)
+                if path is None:
+                    occ.add(anchor)
+                    continue
+                if _lay_polyline(layout, occ, _waypoints(path), {"role": "riser", "edge": (p, c)}) is None:
+                    occ.add(anchor)
+                    continue
+                layout.add(PlacedEntity(INSERTER, ins[0], ins[1], direction=d,
+                                        meta={"role": "in", "edge": (p, c)}))
+                occ.add(ins)
+                used_ins[c].add(ins)
+                done = True
+                break
+        if not done:
             raise LayoutError(f"could not lay riser for lane {p}->{c}")
 
     _emit_fluids(graph, layout, bodies, occ)
@@ -608,11 +658,11 @@ def compile_graph(graph: Graph) -> Layout:
 # ---------------------------------------------------------------------------
 # Fluids: a small BFS pipe router (fluids are sparse -> no congestion/rip-up).
 # ---------------------------------------------------------------------------
-def _pipe_path(occ, starts, goal, bounds):
+def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP):
     """BFS a tile path from any tile in ``starts`` to ``goal``, stepping to free tiles or
-    JUMPING over an occupied run (<= PIPE_UG_GAP) to a free tile. The first move out of a
-    start tile is always adjacent (so the laid pipe connects 4-adjacently to the net).
-    Returns the tile path [start..goal] (only surface tiles), or None."""
+    JUMPING over an occupied run (<= max_gap) to a free tile. The first move out of a start
+    tile is always adjacent. Used for pipes (max_gap=PIPE_UG_GAP) and as a last-resort belt
+    riser router (max_gap=UG_MAX_GAP). Returns the tile path [start..goal], or None."""
     from collections import deque
     lo_x, hi_x, lo_y, hi_y = bounds
     starts = set(starts)
@@ -621,7 +671,7 @@ def _pipe_path(occ, starts, goal, bounds):
         return lo_x <= t[0] <= hi_x and lo_y <= t[1] <= hi_y and (t not in occ or t == goal)
 
     q = deque(starts)
-    prev = {s: (None, None) for s in starts}            # tile -> (parent, dir_from_parent)
+    prev = {s: (None, None, None) for s in starts}       # tile -> (parent, dir, via)
     while q:
         cur = q.popleft()
         if cur == goal:
@@ -630,22 +680,25 @@ def _pipe_path(occ, starts, goal, bounds):
                 path.append(prev[path[-1]][0])
             path.reverse()
             return path
-        came = prev[cur][1]
+        _, came_dir, came_via = prev[cur]
         for d in (EAST, SOUTH, NORTH, WEST):
+            # after a tunnel, the exit can't turn -> first move out must be straight
+            if came_via == "jump" and d != came_dir:
+                continue
             dx, dy = DIR_DELTA[d]
             nb = (cur[0] + dx, cur[1] + dy)
             if nb not in prev and free(nb):
-                prev[nb] = (cur, d)
+                prev[nb] = (cur, d, "step")
                 q.append(nb)
-            # jump over an occupied run, but ONLY when arriving straight (so the tunnel
-            # entrance `cur` is not a corner -- an underground end can't turn).
-            elif nb not in prev and nb in occ and nb != goal and came == d:
+            # tunnel over an occupied run, but ONLY when arriving straight (so the entrance
+            # `cur` is not a corner -- an underground end can't turn).
+            elif nb not in prev and nb in occ and nb != goal and came_dir == d:
                 m = 2
-                while m <= PIPE_UG_GAP:
+                while m <= max_gap:
                     ex = (cur[0] + dx * m, cur[1] + dy * m)
                     if free(ex):
                         if ex not in prev:
-                            prev[ex] = (cur, d)
+                            prev[ex] = (cur, d, "jump")
                             q.append(ex)
                         break
                     m += 1
