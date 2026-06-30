@@ -857,51 +857,95 @@ def _emit_fluids(graph, layout, bodies, occ):
             occ.add(tile)
 
     placed_surface: dict[str, set] = {}                       # src -> its surface pipe tiles
-    anchors: dict[str, tuple] = {}                            # src -> (source_anchor, [cons])
+    seed: dict[str, tuple] = {}                               # src -> source box tile (net seed)
+    cons_boxes: dict[str, list] = {}                          # src -> [(box, mdir) | None]
     order = [n for n in graph.nodes if n in by_src]            # deterministic
 
-    # PHASE 1: attach EVERY fluid box (place its box pipe) before routing ANY link, so a link
-    # can never land 4-adjacent to another network's box pipe and weld it (the MIX-weld bug).
+    # PHASE 1: place a plain pipe on EVERY fluid box (source + consumers) before routing any link,
+    # so the isolation in phase 2 sees all box pipes and links never weld a foreign box (the MIX
+    # bug). A plain pipe on a box connects to its machine 4-adjacently.
     for src in order:
-        before = len(layout.entities)
         sb = pick_box(src, "output")
-        sa = _box_attach(layout, occ, sb[0], sb[1], src) if sb else None
-        cons = []
-        if sa is not None:
-            for d in by_src[src]:
-                db = pick_box(d, "input")
-                cons.append(_box_attach(layout, occ, db[0], db[1], src) if db else None)
-        anchors[src] = (sa, cons)
-        placed_surface[src] = {(e.x, e.y) for e in layout.entities[before:]
-                               if e.proto in (PIPE, PIPE_TO_GROUND)}
-
-    # PHASE 2: link each network's anchors with mostly-underground pipe runs, kept >=1 tile
-    # from every OTHER network's pipes (box pipes + already-routed links) so fluids never weld.
-    for src in order:
-        sa, cons = anchors[src]
-        if sa is None:
+        if sb is None:
             continue
+        occ.discard(sb[0])
+        layout.add(PlacedEntity(PIPE, sb[0][0], sb[0][1], meta={"role": "pipe", "net": src}))
+        occ.add(sb[0])
+        seed[src] = sb[0]
+        cbs, surf = [], {sb[0]}
+        for d in by_src[src]:
+            db = pick_box(d, "input")
+            cbs.append(db)
+            if db is not None:
+                occ.discard(db[0])
+                layout.add(PlacedEntity(PIPE, db[0][0], db[0][1], meta={"role": "pipe", "net": src}))
+                occ.add(db[0])
+                surf.add(db[0])
+        cons_boxes[src] = cbs
+        placed_surface[src] = surf
+
+    def _lay_interior(path):
+        """Lay path[1:-1] (endpoints already pipes); True if it connects to both ends."""
+        if len(path) < 3:
+            return True                                       # endpoints already 4-adjacent
+        return _lay_belt_path(layout, occ, path[1:-1], {"role": "pipe", "net": cur_src}, pipe=True) is not None
+
+    # PHASE 2: link each consumer box into its network, kept >=1 tile from every OTHER network's
+    # pipes so fluids never weld. First try to STEP the run onto the box's plain pipe; if no step-
+    # route exists (the box is walled in by belts), REPLACE the box pipe with a pipe-to-ground
+    # facing the machine and route to its tunnel EXIT -- the link then tunnels under the belt
+    # field straight into the box.
+    for src in order:
+        if src not in seed:
+            continue
+        cur_src = src
         avoid = {(t[0] + dx, t[1] + dy)
                  for o, tiles in placed_surface.items() if o != src
                  for t in tiles for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))}
         avoid -= occ
         occ |= avoid
         before = len(layout.entities)
-        net = {sa}
-        for da in cons:
-            if da is None:
+        net = {seed[src]}
+        for cb in cons_boxes[src]:
+            if cb is None:
                 continue
-            occ.discard(da)
-            path = _pipe_path(occ, net, da, bounds, step_goal=True)   # step onto the box anchor
-            occ.add(da)
-            if path is None:
-                continue
-            interior = path[1:-1]                               # endpoints are the anchor pipes
-            ok = True
-            if interior:
-                ok = _lay_belt_path(layout, occ, interior, {"role": "pipe", "net": src}, pipe=True) is not None
-            if ok:
+            db, mdir = cb
+            path = _pipe_path(occ, net, db, bounds, step_goal=True)        # (a) step onto box
+            if path is not None and _lay_interior(path):
                 net |= set(path)
+                continue
+            # (b) tunnel INTO the box: swap its plain pipe for a p2g facing the machine + an exit
+            box_pipe = next((e for e in layout.entities if e.proto == PIPE and (e.x, e.y) == db
+                             and e.meta.get("net") == src), None)
+            if box_pipe is not None:
+                layout.entities.remove(box_pipe)
+            occ.discard(db)
+            dx, dy = DIR_DELTA[OPPOSITE[mdir]]
+            laid = False
+            for m in range(2, PIPE_UG_GAP + 1):
+                ex = (db[0] + dx * m, db[1] + dy * m)
+                if ex in occ:
+                    continue
+                path = _pipe_path(occ, net, ex, bounds, step_goal=True)
+                if path is None:
+                    continue
+                bp = layout.add(PlacedEntity(PIPE_TO_GROUND, db[0], db[1], direction=mdir,
+                                             meta={"role": "pipe", "net": src}))      # mouth->machine
+                xp = layout.add(PlacedEntity(PIPE_TO_GROUND, ex[0], ex[1], direction=OPPOSITE[mdir],
+                                             meta={"role": "pipe", "net": src}))       # mouth->net
+                occ.add(db)
+                occ.add(ex)
+                for k in range(1, m):
+                    occ.add((db[0] + dx * k, db[1] + dy * k))
+                if _lay_interior(path):
+                    net |= set(path) | {db, ex}
+                    laid = True
+                    break
+                layout.entities.remove(bp)
+                layout.entities.remove(xp)
+            if not laid:
+                layout.add(PlacedEntity(PIPE, db[0], db[1], meta={"role": "pipe", "net": src}))
+                occ.add(db)                                    # restore plain pipe (machine still fed)
         placed_surface[src] |= {(e.x, e.y) for e in layout.entities[before:]
                                 if e.proto in (PIPE, PIPE_TO_GROUND)}
         occ -= avoid
