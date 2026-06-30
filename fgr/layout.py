@@ -592,25 +592,23 @@ def compile_graph(graph: Graph) -> Layout:
         occ.add((rx, Rp[e.src] - 2))
 
     # --- emit, diving discipline by phase order: trunks, feeds, risers ---
-    item_indeg: dict[str, int] = {}                    # item lanes into each consumer
-    for e in graph.edges:
-        if not e.fluid:
-            item_indeg[e.dst] = item_indeg.get(e.dst, 0) + 1
     # 1) trunks (one horizontal lane per producer). The terminal TURNS UP into its last consumer's
-    # riser -- a plain belt corner, so that consumer needs NO tap inserter (the cleanest shape) --
-    # but only when the consumer is UNCONGESTED (<=2 item inputs), so a busy node keeps its port
-    # corridor free for its other inputs. Otherwise the terminal TURNS SOUTH (tapped by the last
-    # consumer) into an empty reserved tile -- never a protruding dead-end stub.
+    # riser -- a plain belt corner that feeds the machine directly, so that consumer needs NO tap
+    # inserter (the cleanest shape). We also keep the tile BELOW the terminal reserved, so the
+    # occupancy is byte-identical to the south-turn variant -> all downstream routing is unchanged
+    # (zero regression). If the up-turn can't lay, fall back to a SOUTH turn (tapped) into an empty
+    # reserved tile -- never a protruding dead-end stub.
     inline_last: dict[str, tuple] = {}
     for p in producers:
         xs = [vx_riser[(p, e.dst)] for e in consumers_of[p]] + [vx_feed[p]]
         x0, x1 = min(xs), max(xs)
         le = max(consumers_of[p], key=lambda e: vx_riser[(p, e.dst)])
-        if vx_riser[(p, le.dst)] == x1 and item_indeg.get(le.dst, 0) <= 2:   # turn UP into it
+        if vx_riser[(p, le.dst)] == x1:                # turn UP into the last consumer's riser
             occ.discard((x1, Rp[p] - 1))               # the up-turn belt takes the tap tile
             if _lay_polyline(layout, occ, [(x0, Rp[p]), (x1, Rp[p]), (x1, Rp[p] - 1)],
                              {"role": "trunk", "src": p}) is not None:
-                inline_last[p] = (le.src, le.dst)
+                occ.add((x1, Rp[p] + 1))               # reserve the south tile too (occupancy
+                inline_last[p] = (le.src, le.dst)      # match) so downstream routing is identical
                 continue
             occ.add((x1, Rp[p] - 1))                   # up-turn unplaceable -> restore, south-turn
         if _lay_polyline(layout, occ, [(x0, Rp[p]), (x1, Rp[p]), (x1, Rp[p] + 1)],
