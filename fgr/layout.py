@@ -772,7 +772,7 @@ def compile_graph(graph: Graph) -> Layout:
 # Fluids: a small BFS pipe router (fluids are sparse -> no congestion/rip-up).
 # ---------------------------------------------------------------------------
 def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP, step_goal=False, cross=None,
-               start_dirs=None, p2g_dir=None):
+               start_dirs=None, p2g_dir=None, goal_pred=None):
     """BFS a tile path from any tile in ``starts`` to ``goal``, stepping to free tiles or
     JUMPING over an occupied run (<= max_gap) to a free tile. The first move out of a start
     tile is always adjacent. With ``step_goal=True`` a tunnel may NOT land on the goal -- the
@@ -784,9 +784,11 @@ def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP, step_goal=False, 
 
     Connection-aware (so a returned path is actually connectable, not just geometric):
     ``start_dirs[t]`` restricts the FIRST move out of start tile t to the directions its entity
-    really exposes a connection (a pipe-to-ground only connects on its open mouth side); and
+    really exposes a connection (a pipe-to-ground only connects on its open mouth side);
     ``p2g_dir[t]`` (tile -> a p2g's axis direction) forbids tunnelling OVER a same-axis
-    pipe-to-ground (which would steal the pairing and leave the tunnel disconnected)."""
+    pipe-to-ground (which would steal the pairing and leave the tunnel disconnected); and
+    ``goal_pred`` forces the goal to be ENTERED only from that one tile (the goal is a tunnel
+    exit whose mouth faces goal_pred -- arriving from any other side wouldn't connect)."""
     from collections import deque
     lo_x, hi_x, lo_y, hi_y = bounds
     starts = set(starts)
@@ -823,6 +825,8 @@ def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP, step_goal=False, 
             nb = (cur[0] + dx, cur[1] + dy)
             if nb not in prev and (free(nb) or (cross is not None and nb != goal
                                                 and in_b(nb) and cross(nb, d))):
+                if nb == goal and goal_pred is not None and cur != goal_pred:
+                    continue                     # goal is a tunnel exit -> enter only via its mouth
                 prev[nb] = (cur, d, "step")
                 q.append(nb)
             # tunnel over an occupied run, but ONLY when arriving straight AND not right
@@ -1060,8 +1064,11 @@ def _emit_fluids(graph, layout, bodies, occ):
             ex = (db[0] + dx * m, db[1] + dy * m)
             if ex in occ:
                 continue
+            # the exit p2g's mouth faces OPPOSITE[mdir] (away from the tunnel), so the run must
+            # arrive at ex from that side -- else it would jam into the p2g's side and not connect.
+            gp = (ex[0] + DIR_DELTA[OPPOSITE[mdir]][0], ex[1] + DIR_DELTA[OPPOSITE[mdir]][1])
             path = _pipe_path(occ, net, ex, bounds, step_goal=True, cross=cross,
-                              start_dirs=sdirs, p2g_dir=p2gd)
+                              start_dirs=sdirs, p2g_dir=p2gd, goal_pred=gp)
             if path is None:
                 continue
             bp = layout.add(PlacedEntity(PIPE_TO_GROUND, db[0], db[1], direction=mdir,
