@@ -80,15 +80,16 @@ def process(name, text, render=False, timeout=0):
         rec["grid"] = "%dx%d" % _extent(lay)
         rec["checks"] = [(c.name, c.ok, c.detail, c.severity) for c in rep.checks]
         rec["status"] = "PASS" if rep.ok else "VERIFY-FAIL"
-        if rep.ok:
-            rec["bp"] = to_blueprint_string(lay, name)        # importable string (copy button)
-            if render and render_blueprint_string is not None:
-                try:
-                    png = OUT / f"render_{name}.png"
-                    render_blueprint_string(rec["bp"], png)
-                    rec["png"] = _embed_jpeg(png)
-                except RenderError as ex:
-                    rec["render_err"] = str(ex)[:200]
+        # render + offer the blueprint for ALL layouts (even failing ones) so the report shows
+        # exactly what v2 produces, including the near-misses; the badge marks pass/fail.
+        rec["bp"] = to_blueprint_string(lay, name)            # importable string (copy button)
+        if render and render_blueprint_string is not None:
+            try:
+                png = OUT / f"render_{name}.png"
+                render_blueprint_string(rec["bp"], png)
+                rec["png"] = _embed_jpeg(png)
+            except RenderError as ex:
+                rec["render_err"] = str(ex)[:200]
     except _Timeout:
         rec["status"], rec["error"], rec["ms"] = "SLOW", f">{timeout}s", timeout * 1000
     except (DslError, LayoutError) as ex:
@@ -230,6 +231,12 @@ def build():
                  key=lambda r: -r.get("entities", 0))[:4]
     print(f"rendering {len(top)} showcase stress passes ...")
     showcase = [process(r["name"], r["source"], render=True) for r in top]
+    # render a few of the largest FAILING stress graphs (the dense routing tail) so the
+    # report shows the near-misses too, not just the wins.
+    near = sorted((r for r in stress if r["status"] != "PASS"),
+                  key=lambda r: -r.get("entities", 0))[:3]
+    print(f"rendering {len(near)} near-miss stress fails ...")
+    nearmiss = [process(r["name"], r["source"], render=True) for r in near]
 
     print("validate-model ...")
     try:
@@ -265,10 +272,13 @@ spec; FBSR renders the result. Correctness comes from the verifier, not the pict
 <div class='card'>
 <pre>.fgr DSL ──parse──▶ Graph(spec) ──generate──▶ Layout ──verify──▶ PASS/FAIL ──▶ FBSR ──▶ PNG</pre>
 <p class='muted' style='margin-bottom:0'>Lanes: <code>A -&gt; B</code> dedicated belt ·
-<code>A -&gt; B, C</code> one belt split to many (splitter bus) ·
-<code>A, B -&gt; C</code> merge · <code>A ~&gt; B</code> fluid lane (pipe). Machines:
+<code>A -&gt; B, C</code> one belt tapped by an inline inserter per consumer (no splitters) ·
+<code>A, B -&gt; C</code> multi-tap merge · <code>A ~&gt; B</code> fluid lane (pipe). Machines:
 <code>input</code>/<code>output</code> chests, <code>assembler</code>, <code>furnace</code>,
 <code>chemical</code> plant, <code>fluid</code> source (pipes attach at real fluid-box tiles).</p>
+<p class='muted' style='margin-bottom:0'>Generator: the <b>v2 lane fabric</b> — four
+deterministic passes (layer → order → place → emit), no search or rip-up, so every case
+compiles instantly. The verifier was hardened by an adversarial audit, so a PASS is sound.</p>
 </div>
 
 <h2>Verifier model vs. Factorio data (FBSR)</h2>
@@ -284,9 +294,9 @@ furnaces, and oil/chemical fluids (pipes, tanks, mixing-free networks).</p>
 
 <h2>Stress battery — generated DAGs</h2>
 <p class='sub'>{len(stress)} machine-generated complex recipe graphs run through compile +
-verify to find where the generator breaks. All failures are the heuristic router/manifold
-hitting its limit (extreme single-source fan-outs, or large dense graphs that exhaust the
-rip-up budget) — not the verifier. See STATUS.md.</p>
+verify. Every case compiles (no crashes); the remaining failures are routing through a dense
+field — multi-fluid oil/chem chains, very high fan-in, congested reconvergence — which need
+fluid-aware placement + collector merges, not the verifier. See STATUS.md.</p>
 <div class='card'><table>
 <tr><th>case</th><th>nodes</th><th>lanes</th><th>ents</th><th>grid</th><th>ms</th><th>outcome</th></tr>
 {''.join(stress_row(r) for r in stress)}
@@ -294,6 +304,12 @@ rip-up budget) — not the verifier. See STATUS.md.</p>
 
 <h2>Showcase — largest passing stress graphs</h2>
 {''.join(card(r) for r in showcase)}
+
+<h2>Near-misses — the dense routing tail</h2>
+<p class='sub'>The largest <i>failing</i> stress graphs, rendered so the gap is visible: the
+machines and most lanes place cleanly; what's left is dense multi-fluid pipe routing and
+very-high-fan-in/congested item lanes (the verifier flags the exact unmet lanes).</p>
+{''.join(card(r) for r in nearmiss)}
 
 </div><script>{COPY_JS}</script></body></html>"""
 
