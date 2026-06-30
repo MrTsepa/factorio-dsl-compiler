@@ -23,12 +23,12 @@ def _rel(p):
 
 # v2 doesn't yet fully verify these (tracked tail). Keep sorted; delete as they get fixed.
 KNOWN_FAILING = {
-    "complex/flying_robot_frame.fgr", "complex/wide_reconverge.fgr",
+    "complex/flying_robot_frame.fgr",
     "stress/deepchain_2.fgr", "stress/deepchain_5.fgr", "stress/fluids_1.fgr",
     "stress/fluids_5.fgr",
     "stress/fluids_6.fgr", "stress/fluids_7.fgr",
     "stress/highfanin_2.fgr", "stress/highfanin_6.fgr",
-    "stress/reconverge_1.fgr", "stress/reconverge_3.fgr",
+    "stress/reconverge_3.fgr",
     "stress/scale_1.fgr", "stress/scale_2.fgr", "stress/scale_3.fgr", "stress/scale_4.fgr",
     "stress/scale_5.fgr", "stress/scale_6.fgr", "stress/science_6.fgr",
 }
