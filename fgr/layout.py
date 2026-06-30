@@ -771,20 +771,24 @@ def compile_graph(graph: Graph) -> Layout:
 # ---------------------------------------------------------------------------
 # Fluids: a small BFS pipe router (fluids are sparse -> no congestion/rip-up).
 # ---------------------------------------------------------------------------
-def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP, step_goal=False):
+def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP, step_goal=False, cross=None):
     """BFS a tile path from any tile in ``starts`` to ``goal``, stepping to free tiles or
     JUMPING over an occupied run (<= max_gap) to a free tile. The first move out of a start
     tile is always adjacent. With ``step_goal=True`` a tunnel may NOT land on the goal -- the
     goal must be reached by a plain step from a free neighbour (so a pipe link arriving at a
     fluid box connects 4-adjacently to the box's plain pipe rather than tunnelling onto it,
-    which the interior-only layer can't realise). Used for pipes (max_gap=PIPE_UG_GAP) and as a
-    last-resort belt riser router (max_gap=UG_MAX_GAP). Returns the tile path [start..goal]."""
+    which the interior-only layer can't realise). ``cross(t, d)`` may mark an occupied tile as
+    STEP-passable when entered going d (a belt that can be dived under to free its surface for a
+    pipe). Used for pipes (max_gap=PIPE_UG_GAP) and the riser router (max_gap=UG_MAX_GAP)."""
     from collections import deque
     lo_x, hi_x, lo_y, hi_y = bounds
     starts = set(starts)
 
     def free(t):
         return lo_x <= t[0] <= hi_x and lo_y <= t[1] <= hi_y and (t not in occ or t == goal)
+
+    def in_b(t):
+        return lo_x <= t[0] <= hi_x and lo_y <= t[1] <= hi_y
 
     q = deque(starts)
     prev = {s: (None, None, None) for s in starts}       # tile -> (parent, dir, via)
@@ -803,7 +807,8 @@ def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP, step_goal=False):
                 continue
             dx, dy = DIR_DELTA[d]
             nb = (cur[0] + dx, cur[1] + dy)
-            if nb not in prev and free(nb):
+            if nb not in prev and (free(nb) or (cross is not None and nb != goal
+                                                and in_b(nb) and cross(nb, d))):
                 prev[nb] = (cur, d, "step")
                 q.append(nb)
             # tunnel over an occupied run, but ONLY when arriving straight AND not right
@@ -925,6 +930,44 @@ def _emit_fluids(graph, layout, bodies, occ):
         for tile, _flow, _md in _fluid_connections(b.proto, b.x, b.y, b.direction, with_dir=True):
             occ.add(tile)
 
+    # BELT-DIVE crossing (fallback): a pipe may cross a belt by sinking that straight run under it
+    # -- belt(t-bd) belt(t) belt(t+bd) -> ug-in(t-bd) [buried t] ug-out(t+bd) -- freeing t's
+    # surface for the pipe. SAFE only PERPENDICULAR, on one straight run fed straight (so t-bd is a
+    # validly-fed ug-in), and never over a tapped belt (the dive would break the inserter).
+    belt_at = {(e.x, e.y): e for e in layout.entities if e.proto == BELT}
+    inserter_pick = {(e.x + DIR_DELTA[e.direction][0], e.y + DIR_DELTA[e.direction][1])
+                     for e in layout.entities if e.proto == INSERTER}
+
+    def crossable(t, d):
+        e = belt_at.get(t)
+        if e is None:
+            return False
+        bd = e.direction or 0
+        if bd == d or bd == OPPOSITE[d]:                      # pipe runs ALONG the belt -> unsafe
+            return False
+        dx, dy = DIR_DELTA[bd]
+        a, b2, a2 = ((t[0] - dx, t[1] - dy), (t[0] + dx, t[1] + dy), (t[0] - 2 * dx, t[1] - 2 * dy))
+        if any(belt_at.get(x) is None or (belt_at[x].direction or 0) != bd for x in (a, b2, a2)):
+            return False                                      # not a straight run fed straight
+        return not (t in inserter_pick or a in inserter_pick or b2 in inserter_pick)
+
+    def dive(t):
+        e = belt_at.get(t)
+        if e is None:
+            return True                                       # already free
+        bd = e.direction or 0
+        dx, dy = DIR_DELTA[bd]
+        a, b2 = (t[0] - dx, t[1] - dy), (t[0] + dx, t[1] + dy)
+        if belt_at.get(a) is None or belt_at.get(b2) is None:
+            return False
+        belt_at[a].proto, belt_at[a].ug_type = UNDERGROUND, "input"
+        belt_at[b2].proto, belt_at[b2].ug_type = UNDERGROUND, "output"
+        layout.entities.remove(e)
+        for k in (t, a, b2):
+            belt_at.pop(k, None)
+        occ.discard(t)
+        return True
+
     placed_surface: dict[str, set] = {}                       # src -> its surface pipe tiles
     seed: dict[str, tuple] = {}                               # src -> source box tile (net seed)
     cons_boxes: dict[str, list] = {}                          # src -> [(box, mdir) | None]
@@ -955,17 +998,57 @@ def _emit_fluids(graph, layout, bodies, occ):
         cons_boxes[src] = cbs
         placed_surface[src] = surf
 
-    def _lay_interior(path):
-        """Lay path[1:-1] (endpoints already pipes); True if it connects to both ends."""
+    def _lay_interior(path, cross):
+        """Lay path[1:-1] (endpoints already pipes); True if it connects both ends. When routed
+        with belt-crossing enabled, dive each crossed belt under it first."""
+        if cross:
+            for t in path[1:-1]:
+                if t in belt_at and not dive(t):
+                    return False
         if len(path) < 3:
             return True                                       # endpoints already 4-adjacent
         return _lay_belt_path(layout, occ, path[1:-1], {"role": "pipe", "net": cur_src}, pipe=True) is not None
 
+    def _link(net, db, mdir, cross):
+        """(a) step the run onto the box's plain pipe; else (b) tunnel a p2g INTO the box to a
+        routed exit. With cross=crossable the run may also dive under belts. Grows net, ret bool."""
+        path = _pipe_path(occ, net, db, bounds, step_goal=True, cross=cross)    # (a) step onto box
+        if path is not None and _lay_interior(path, cross):
+            net |= set(path)
+            return True
+        box_pipe = next((e for e in layout.entities if e.proto == PIPE and (e.x, e.y) == db
+                         and e.meta.get("net") == cur_src), None)
+        if box_pipe is not None:
+            layout.entities.remove(box_pipe)
+        occ.discard(db)
+        dx, dy = DIR_DELTA[OPPOSITE[mdir]]
+        for m in range(2, PIPE_UG_GAP + 1):                   # (b) tunnel into the box
+            ex = (db[0] + dx * m, db[1] + dy * m)
+            if ex in occ:
+                continue
+            path = _pipe_path(occ, net, ex, bounds, step_goal=True, cross=cross)
+            if path is None:
+                continue
+            bp = layout.add(PlacedEntity(PIPE_TO_GROUND, db[0], db[1], direction=mdir,
+                                         meta={"role": "pipe", "net": cur_src}))      # mouth->machine
+            xp = layout.add(PlacedEntity(PIPE_TO_GROUND, ex[0], ex[1], direction=OPPOSITE[mdir],
+                                         meta={"role": "pipe", "net": cur_src}))       # mouth->net
+            occ.add(db)
+            occ.add(ex)
+            for k in range(1, m):
+                occ.add((db[0] + dx * k, db[1] + dy * k))
+            if _lay_interior(path, cross):
+                net |= set(path) | {db, ex}
+                return True
+            layout.entities.remove(bp)
+            layout.entities.remove(xp)
+        layout.add(PlacedEntity(PIPE, db[0], db[1], meta={"role": "pipe", "net": cur_src}))
+        occ.add(db)                                           # restore plain pipe (machine still fed)
+        return False
+
     # PHASE 2: link each consumer box into its network, kept >=1 tile from every OTHER network's
-    # pipes so fluids never weld. First try to STEP the run onto the box's plain pipe; if no step-
-    # route exists (the box is walled in by belts), REPLACE the box pipe with a pipe-to-ground
-    # facing the machine and route to its tunnel EXIT -- the link then tunnels under the belt
-    # field straight into the box.
+    # pipes so fluids never weld. Step onto the box, else tunnel into it; if BOTH fail (the box is
+    # walled in by belts) retry allowing the run to DIVE under straight belt runs (belt-dive).
     for src in order:
         if src not in seed:
             continue
@@ -982,42 +1065,8 @@ def _emit_fluids(graph, layout, bodies, occ):
         for cb in sorted((c for c in cons_boxes[src] if c is not None),
                          key=lambda c: abs(c[0][0] - seed[src][0]) + abs(c[0][1] - seed[src][1])):
             db, mdir = cb
-            path = _pipe_path(occ, net, db, bounds, step_goal=True)        # (a) step onto box
-            if path is not None and _lay_interior(path):
-                net |= set(path)
-                continue
-            # (b) tunnel INTO the box: swap its plain pipe for a p2g facing the machine + an exit
-            box_pipe = next((e for e in layout.entities if e.proto == PIPE and (e.x, e.y) == db
-                             and e.meta.get("net") == src), None)
-            if box_pipe is not None:
-                layout.entities.remove(box_pipe)
-            occ.discard(db)
-            dx, dy = DIR_DELTA[OPPOSITE[mdir]]
-            laid = False
-            for m in range(2, PIPE_UG_GAP + 1):
-                ex = (db[0] + dx * m, db[1] + dy * m)
-                if ex in occ:
-                    continue
-                path = _pipe_path(occ, net, ex, bounds, step_goal=True)
-                if path is None:
-                    continue
-                bp = layout.add(PlacedEntity(PIPE_TO_GROUND, db[0], db[1], direction=mdir,
-                                             meta={"role": "pipe", "net": src}))      # mouth->machine
-                xp = layout.add(PlacedEntity(PIPE_TO_GROUND, ex[0], ex[1], direction=OPPOSITE[mdir],
-                                             meta={"role": "pipe", "net": src}))       # mouth->net
-                occ.add(db)
-                occ.add(ex)
-                for k in range(1, m):
-                    occ.add((db[0] + dx * k, db[1] + dy * k))
-                if _lay_interior(path):
-                    net |= set(path) | {db, ex}
-                    laid = True
-                    break
-                layout.entities.remove(bp)
-                layout.entities.remove(xp)
-            if not laid:
-                layout.add(PlacedEntity(PIPE, db[0], db[1], meta={"role": "pipe", "net": src}))
-                occ.add(db)                                    # restore plain pipe (machine still fed)
+            if not _link(net, db, mdir, cross=None):          # normal first (working cases unchanged)
+                _link(net, db, mdir, cross=crossable)          # then belt-dive fallback
         placed_surface[src] |= {(e.x, e.y) for e in layout.entities[before:]
                                 if e.proto in (PIPE, PIPE_TO_GROUND)}
         occ -= avoid
