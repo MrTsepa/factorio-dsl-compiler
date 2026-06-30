@@ -792,36 +792,6 @@ def _waypoints(path):
     return wp
 
 
-def _box_attach(layout, occ, box, mdir, net):
-    """Attach a pipe to a fluid box at `box` (machine in direction `mdir`). Prefers a PLAIN
-    pipe on the box (routing then connects 4-adjacently); if the box's route side is blocked
-    (e.g. a belt), instead drop a pipe-to-ground ON the box facing the machine and tunnel
-    straight OUT under whatever, returning the exit tile. Returns the anchor tile routing
-    should connect to, or None."""
-    occ.discard(box)
-    if any((box[0] + DIR_DELTA[d][0], box[1] + DIR_DELTA[d][1]) not in occ
-           for d in (EAST, WEST, NORTH, SOUTH)):              # ANY free neighbour -> plain pipe
-        layout.add(PlacedEntity(PIPE, box[0], box[1], meta={"role": "pipe", "net": net}))
-        occ.add(box)                                          # routing reaches it via that side
-        return box
-    away = OPPOSITE[mdir]                                     # fully boxed in -> p2g into the box
-    dx, dy = DIR_DELTA[away]                                  # facing the machine, tunnel out
-    for m in range(2, PIPE_UG_GAP + 1):
-        ex = (box[0] + dx * m, box[1] + dy * m)
-        if ex not in occ:
-            layout.add(PlacedEntity(PIPE_TO_GROUND, box[0], box[1], direction=mdir,
-                                    meta={"role": "pipe", "net": net}))      # mouth -> machine
-            layout.add(PlacedEntity(PIPE_TO_GROUND, ex[0], ex[1], direction=away,
-                                    meta={"role": "pipe", "net": net}))      # exit -> forward
-            for k in range(1, m):
-                occ.add((box[0] + dx * k, box[1] + dy * k))    # buried
-            occ.add(box)
-            occ.add(ex)
-            return ex
-    occ.add(box)
-    return None
-
-
 def _emit_fluids(graph, layout, bodies, occ):
     """Place pipe networks for fluid lanes. One network per fluid SOURCE: its output box is
     attached, then each consumer's input box is attached and linked into the network with a
@@ -848,7 +818,7 @@ def _emit_fluids(graph, layout, bodies, occ):
     bounds = (min(xs) - 12, max(xs) + 12, min(ys) - 12, max(ys) + 12)
 
     # Block every fluid-box tile so a pipe never routes ONTO an unused box (which would weld a
-    # phantom fluid connection in-game). _box_attach unblocks the box it actually attaches.
+    # phantom fluid connection in-game). Phase 1 below unblocks the boxes it actually uses.
     fluid_ep = {e.src for e in fluid_edges} | {e.dst for e in fluid_edges}
     for name, b in bodies.items():
         if b.proto == ASSEMBLER and name not in fluid_ep:
