@@ -12,12 +12,12 @@ unchanged — the verifier remains the independent oracle). Regenerate the numbe
 
 | Suite | Result |
 |-------|--------|
-| **pytest** | **77 passed, 34 xfailed, 1 skipped** (green) |
+| **pytest** | **87 passed, 25 xfailed** (green) |
 | **All 49 examples compile** (no crashes) | **49 / 49** |
-| **Examples that fully verify** | **22 / 49** |
+| **Examples that fully verify** | **29 / 49** |
 | &nbsp;&nbsp;• basic | 6 / 6 |
-| &nbsp;&nbsp;• complex (hand-authored) | 3 / 6 |
-| &nbsp;&nbsp;• stress (generated DAGs) | 13 / 37 |
+| &nbsp;&nbsp;• complex (hand-authored) | 4 / 6 |
+| &nbsp;&nbsp;• stress (generated DAGs) | 19 / 37 |
 
 A "pass" means the layout was *independently graded* by `fgr/verify.py` as physically
 realising the spec: every declared belt/pipe lane connects, nothing spurious, no overlaps,
@@ -81,19 +81,29 @@ and attached at real boxes. Out of its scope (by design, tracked):
 All remaining failures are **routing through a dense field**, never the verifier or the model:
 
 - **Complex multi-fluid chains** (oil/chem refineries: `fluids_*`, `science_*`, several
-  `highfanin_*`/`scale_*`) — many machine→machine fluid lanes whose boxes end up boxed-in
-  (one free neighbour) in the dense interior; the pipe tree can't reach them. The fix is
-  **fluid-aware placement** (cluster fluid-connected machines / a dedicated fluid corridor),
-  a structural rework rather than a routing tweak.
+  `highfanin_*`/`scale_*`) — machine→machine fluid lanes whose boxes get walled in. Keeping
+  each fluid box's **approach corridor clear of belts** (reserved during item routing, since
+  we know the boxes up front; belts then route around or dive under it) recovered several
+  (`fluids_3`, `reconverge_4`). The residue is boxes walled by *machines* (not belts), which
+  the corridor can't open — that needs **fluid-aware placement** (cluster fluid-connected
+  machines), a structural change.
 - **Very high fan-in to small sinks** (`wide_reconverge`: 7 inputs into one 1×1 chest) —
   exceeds the perimeter's port count; needs a **collector-belt merge** (several lanes onto
   one belt feeding a single port).
 - **Congested reconvergence** (`reconverge_1`, `scale_*`) — a consumer's perimeter is
   crowded by its own converging inputs, so the last riser finds no free, reachable port.
 
-Contained levers (gutter width, degree-aware clearance, isolation tuning, stronger BFS
-fallback) were explored and are at their useful limit here; closing the tail needs the two
-structural changes above (fluid-aware placement + collector merges).
+Why the tunnel-reach asymmetry settles the routing order: a **pipe-to-ground reaches 10
+tiles, an underground belt only 5**, so pipes cross the belt field far more easily than belts
+cross a pipe field — routing **items first, fluids last** (the current order) is therefore
+optimal, and giving fluids priority makes items the ones that can't cross (measured worse).
+Two further levers were explored and found not to pay off *here*: **rotating machines** off
+the default north — fluid boxes must stay on the N/S faces because E/W are the item-inserter
+faces, so the only safe flip (N↔S) just trades one congested side for the other; and a
+**belt-dive crossing** (sink a straight belt run underground so a pipe crosses on top) — a
+sound technique, but redundant with the approach-corridor, which already prevents the
+belt-walls it would cross. Closing the rest needs the two structural changes above
+(fluid-aware placement + collector merges).
 
 ## Tests
 
