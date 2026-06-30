@@ -666,17 +666,26 @@ def compile_graph(graph: Graph) -> Layout:
     bfs_bounds = (-2, bx_max + 4, by_min - 8, band_bot + 3 * len(row_end) + 6)
     # 2) feeds (producer body -> its trunk): straight jog to the feed column, else BFS reroute
     # (diving under any pipe/belt), else non-fatal -- drop the out-inserter (lanes left unrouted).
+    ent_tiles = {(e.x, e.y) for e in layout.entities}    # tiles holding a real entity (not buried)
     for p in producers:
         drop = out_drop[p]
-        occ.discard(drop)
         fx = vx_feed[p]
         target = (fx, Rp[p] - 1)
+        # occ.discard frees a RESERVATION; but if an earlier feed's reroute wound a real entity
+        # through our endpoint, discarding would let us lay on top of it -> overlap. Skip instead.
+        if drop in ent_tiles or target in ent_tiles:
+            oi = (drop[0] - 1, drop[1])
+            layout.entities = [e for e in layout.entities if not (e.proto == INSERTER and (e.x, e.y) == oi)]
+            continue
+        occ.discard(drop)
         occ.discard(target)
         pts = [drop, (fx, drop[1]), target] if fx != drop[0] else [drop, target]
-        if _lay_polyline(layout, occ, pts, {"role": "feed", "src": p}) is not None:
-            continue
-        path = _pipe_path(occ, {drop}, target, bfs_bounds, max_gap=UG_MAX_GAP)
-        if path and _lay_belt_path(layout, occ, path, {"role": "feed", "src": p}):
+        ok = _lay_polyline(layout, occ, pts, {"role": "feed", "src": p}) is not None
+        if not ok:
+            path = _pipe_path(occ, {drop}, target, bfs_bounds, max_gap=UG_MAX_GAP)
+            ok = bool(path and _lay_belt_path(layout, occ, path, {"role": "feed", "src": p}))
+        if ok:
+            ent_tiles = {(e.x, e.y) for e in layout.entities}   # so the next feed sees ours
             continue
         oi = (drop[0] - 1, drop[1])
         layout.entities = [e for e in layout.entities if not (e.proto == INSERTER and (e.x, e.y) == oi)]
@@ -1056,8 +1065,10 @@ def _emit_fluids(graph, layout, bodies, occ):
             return True
         box_pipe = next((e for e in layout.entities if e.proto == PIPE and (e.x, e.y) == db
                          and e.meta.get("net") == cur_src), None)
-        if box_pipe is not None:
-            layout.entities.remove(box_pipe)
+        if box_pipe is None:
+            return False        # our box's plain pipe is gone (db taken by another lane's reroute);
+            #                     discarding db would free that foreign entity and overlap it.
+        layout.entities.remove(box_pipe)
         occ.discard(db)
         dx, dy = DIR_DELTA[OPPOSITE[mdir]]
         for m in range(2, PIPE_UG_GAP + 1):                   # (b) tunnel into the box
