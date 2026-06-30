@@ -473,6 +473,26 @@ def compile_graph(graph: Graph) -> Layout:
 
     band_bot = max((b.y + b.size[1] - 1 for b in bodies.values()), default=0)
 
+    # KEEP FLUID PORTS CLEAR: reserve a short approach corridor leading away from each fluid box
+    # that actually carries fluid, so the item routers treat it as occupied -- belts go AROUND or
+    # dive UNDER it (the polyline router tunnels under occupied tiles), leaving the box reachable
+    # by pipes. Released again just before fluids route. (Now safe: feeds/direct reroute robustly.)
+    fluid_in = {e.dst for e in graph.edges if e.fluid}
+    fluid_out = {e.src for e in graph.edges if e.fluid}
+    fluid_corridor: set[tuple[int, int]] = set()
+    for name, b in bodies.items():
+        for tile, flow, mdir in _fluid_connections(b.proto, b.x, b.y, b.direction, with_dir=True):
+            if not ((flow in ("input", "both") and name in fluid_in)
+                    or (flow in ("output", "both") and name in fluid_out)):
+                continue
+            dx, dy = DIR_DELTA[OPPOSITE[mdir]]            # away from the machine = approach side
+            for k in range(1, 6):
+                t = (tile[0] + dx * k, tile[1] + dy * k)
+                if t in occ or t[1] > band_bot:          # hit a body/box, or entering the channel
+                    break
+                fluid_corridor.add(t)
+    occ |= fluid_corridor
+
     used_ins: dict[str, set] = {n: set() for n in bodies}
 
     # DIRECT edges: straight horizontal belt at the shared center row.
@@ -695,6 +715,7 @@ def compile_graph(graph: Graph) -> Layout:
         else:
             occ.add(start)                             # leave lane unrouted (verifier reports it)
 
+    occ -= fluid_corridor            # release the kept-clear fluid approaches for the pipe router
     _emit_fluids(graph, layout, bodies, occ)
     return layout
 
