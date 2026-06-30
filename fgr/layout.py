@@ -592,14 +592,23 @@ def compile_graph(graph: Graph) -> Layout:
         occ.add((rx, Rp[e.src] - 2))
 
     # --- emit, diving discipline by phase order: trunks, feeds, risers ---
-    # 1) trunks (horizontal lanes, one per producer). End each with a 1-tile SOUTH tail
-    # into the (free) row below so the terminal belt never faces a foreign lane east of it
-    # (which would weld a spurious lane). Rows Rp+1/Rp+2 are free (trunk spacing 3).
+    # 1) trunks (horizontal lanes, one per producer). The terminal belt TURNS SOUTH so it never
+    # faces a foreign lane east of it (which would weld a spurious lane). We lay the turn, then
+    # DROP the extra tail tile below it: the terminal is a clean 1-tile south turn into empty
+    # (still tapped by the last consumer), not a protruding dead-end stub. That tail tile carried
+    # nothing downstream, so removing it cannot change any lane.
     for p in producers:
         xs = [vx_riser[(p, e.dst)] for e in consumers_of[p]] + [vx_feed[p]]
         x0, x1 = min(xs), max(xs)
-        pts = [(x0, Rp[p]), (x1, Rp[p]), (x1, Rp[p] + 1)]   # south tail: terminal belt turns
-        if not _lay_polyline(layout, occ, pts, {"role": "trunk", "src": p}):   # into empty, so
+        if _lay_polyline(layout, occ, [(x0, Rp[p]), (x1, Rp[p]), (x1, Rp[p] + 1)],
+                         {"role": "trunk", "src": p}) is not None:
+            # remove the tail BELT but KEEP its tile reserved in occ, so downstream routing is
+            # byte-identical to the south-tail version (zero regression) -- only the dead-end
+            # belt entity is gone; the terminal still turns south into a now-empty reserved tile.
+            layout.entities = [e for e in layout.entities
+                               if not (e.proto == BELT and (e.x, e.y) == (x1, Rp[p] + 1)
+                                       and e.meta.get("src") == p)]
+        else:
             _lay_polyline(layout, occ, [(x0, Rp[p]), (x1, Rp[p])], {"role": "trunk", "src": p})
     # 2) feeds (producer body -> its trunk), jogging to the feed column then diving down
     for p in producers:
