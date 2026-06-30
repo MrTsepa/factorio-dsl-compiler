@@ -681,11 +681,14 @@ def compile_graph(graph: Graph) -> Layout:
 # ---------------------------------------------------------------------------
 # Fluids: a small BFS pipe router (fluids are sparse -> no congestion/rip-up).
 # ---------------------------------------------------------------------------
-def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP):
+def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP, step_goal=False):
     """BFS a tile path from any tile in ``starts`` to ``goal``, stepping to free tiles or
     JUMPING over an occupied run (<= max_gap) to a free tile. The first move out of a start
-    tile is always adjacent. Used for pipes (max_gap=PIPE_UG_GAP) and as a last-resort belt
-    riser router (max_gap=UG_MAX_GAP). Returns the tile path [start..goal], or None."""
+    tile is always adjacent. With ``step_goal=True`` a tunnel may NOT land on the goal -- the
+    goal must be reached by a plain step from a free neighbour (so a pipe link arriving at a
+    fluid box connects 4-adjacently to the box's plain pipe rather than tunnelling onto it,
+    which the interior-only layer can't realise). Used for pipes (max_gap=PIPE_UG_GAP) and as a
+    last-resort belt riser router (max_gap=UG_MAX_GAP). Returns the tile path [start..goal]."""
     from collections import deque
     lo_x, hi_x, lo_y, hi_y = bounds
     starts = set(starts)
@@ -720,7 +723,7 @@ def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP):
                 while m <= max_gap:
                     ex = (cur[0] + dx * m, cur[1] + dy * m)
                     if free(ex):
-                        if ex not in prev:
+                        if ex not in prev and not (step_goal and ex == goal):
                             prev[ex] = (cur, d, "jump")
                             q.append(ex)
                         break
@@ -889,7 +892,7 @@ def _emit_fluids(graph, layout, bodies, occ):
             if da is None:
                 continue
             occ.discard(da)
-            path = _pipe_path(occ, net, da, bounds)            # net anchors -> this anchor
+            path = _pipe_path(occ, net, da, bounds, step_goal=True)   # step onto the box anchor
             occ.add(da)
             if path is None:
                 continue
