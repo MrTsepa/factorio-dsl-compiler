@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from fgr.dsl import parse                              # noqa: E402
-from fgr.ir import DIR_DELTA, OPPOSITE                 # noqa: E402
+from fgr.ir import DIR_DELTA                           # noqa: E402
 from fgr.layout import (BELT, PIPE_TO_GROUND, UNDERGROUND,  # noqa: E402
                         compile_graph)
 from fgr.verify import verify                          # noqa: E402
