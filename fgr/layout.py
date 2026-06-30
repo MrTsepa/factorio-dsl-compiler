@@ -845,12 +845,21 @@ def _emit_fluids(graph, layout, bodies, occ):
     for e in fluid_edges:
         by_src.setdefault(e.src, []).append(e.dst)
     box_used = {n: set() for n in bodies}
+    box_pipe_net: dict[tuple[int, int], str] = {}             # placed box-pipe tile -> its net
 
-    def pick_box(name, want):
+    def pick_box(name, want, net):
+        """Pick an available fluid box of the wanted flow. Prefer one whose tile does NOT touch
+        another network's already-placed box pipe -- two differing-fluid boxes sitting 4-adjacent
+        (machines stacked with facing boxes) would weld into one network (a spurious lane)."""
         b = bodies[name]
-        for tile, flow, mdir in _fluid_connections(b.proto, b.x, b.y, b.direction, with_dir=True):
-            if tile in box_used[name] or (flow != want and flow != "both"):
-                continue
+        cands = [(tile, mdir) for tile, flow, mdir
+                 in _fluid_connections(b.proto, b.x, b.y, b.direction, with_dir=True)
+                 if tile not in box_used[name] and flow in (want, "both")]
+
+        def weld_free(tile):
+            return all(box_pipe_net.get((tile[0] + dx, tile[1] + dy), net) == net
+                       for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+        for tile, mdir in sorted(cands, key=lambda c: not weld_free(c[0])):  # weld-free first
             box_used[name].add(tile)
             return tile, mdir
         return None
@@ -877,21 +886,23 @@ def _emit_fluids(graph, layout, bodies, occ):
     # so the isolation in phase 2 sees all box pipes and links never weld a foreign box (the MIX
     # bug). A plain pipe on a box connects to its machine 4-adjacently.
     for src in order:
-        sb = pick_box(src, "output")
+        sb = pick_box(src, "output", src)
         if sb is None:
             continue
         occ.discard(sb[0])
         layout.add(PlacedEntity(PIPE, sb[0][0], sb[0][1], meta={"role": "pipe", "net": src}))
         occ.add(sb[0])
+        box_pipe_net[sb[0]] = src
         seed[src] = sb[0]
         cbs, surf = [], {sb[0]}
         for d in by_src[src]:
-            db = pick_box(d, "input")
+            db = pick_box(d, "input", src)
             cbs.append(db)
             if db is not None:
                 occ.discard(db[0])
                 layout.add(PlacedEntity(PIPE, db[0][0], db[0][1], meta={"role": "pipe", "net": src}))
                 occ.add(db[0])
+                box_pipe_net[db[0]] = src
                 surf.add(db[0])
         cons_boxes[src] = cbs
         placed_surface[src] = surf
