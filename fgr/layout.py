@@ -771,7 +771,8 @@ def compile_graph(graph: Graph) -> Layout:
 # ---------------------------------------------------------------------------
 # Fluids: a small BFS pipe router (fluids are sparse -> no congestion/rip-up).
 # ---------------------------------------------------------------------------
-def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP, step_goal=False, cross=None):
+def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP, step_goal=False, cross=None,
+               start_dirs=None, p2g_dir=None):
     """BFS a tile path from any tile in ``starts`` to ``goal``, stepping to free tiles or
     JUMPING over an occupied run (<= max_gap) to a free tile. The first move out of a start
     tile is always adjacent. With ``step_goal=True`` a tunnel may NOT land on the goal -- the
@@ -779,16 +780,26 @@ def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP, step_goal=False, 
     fluid box connects 4-adjacently to the box's plain pipe rather than tunnelling onto it,
     which the interior-only layer can't realise). ``cross(t, d)`` may mark an occupied tile as
     STEP-passable when entered going d (a belt that can be dived under to free its surface for a
-    pipe). Used for pipes (max_gap=PIPE_UG_GAP) and the riser router (max_gap=UG_MAX_GAP)."""
+    pipe). Used for pipes (max_gap=PIPE_UG_GAP) and the riser router (max_gap=UG_MAX_GAP).
+
+    Connection-aware (so a returned path is actually connectable, not just geometric):
+    ``start_dirs[t]`` restricts the FIRST move out of start tile t to the directions its entity
+    really exposes a connection (a pipe-to-ground only connects on its open mouth side); and
+    ``p2g_dir[t]`` (tile -> a p2g's axis direction) forbids tunnelling OVER a same-axis
+    pipe-to-ground (which would steal the pairing and leave the tunnel disconnected)."""
     from collections import deque
     lo_x, hi_x, lo_y, hi_y = bounds
     starts = set(starts)
+    ALL = (EAST, SOUTH, NORTH, WEST)
 
     def free(t):
         return lo_x <= t[0] <= hi_x and lo_y <= t[1] <= hi_y and (t not in occ or t == goal)
 
     def in_b(t):
         return lo_x <= t[0] <= hi_x and lo_y <= t[1] <= hi_y
+
+    def axis_blocks(t, d):     # a same-axis p2g in a tunnel run steals the pairing
+        return p2g_dir is not None and p2g_dir.get(t) in (d, OPPOSITE[d])
 
     q = deque(starts)
     prev = {s: (None, None, None) for s in starts}       # tile -> (parent, dir, via)
@@ -801,7 +812,10 @@ def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP, step_goal=False, 
             path.reverse()
             return path
         _, came_dir, came_via = prev[cur]
-        for d in (EAST, SOUTH, NORTH, WEST):
+        dirs = ALL
+        if came_via is None and start_dirs is not None:  # leaving a start: only its open sides
+            dirs = start_dirs.get(cur, ALL)
+        for d in dirs:
             # after a tunnel, the exit can't turn -> first move out must be straight
             if came_via == "jump" and d != came_dir:
                 continue
@@ -813,7 +827,8 @@ def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP, step_goal=False, 
                 q.append(nb)
             # tunnel over an occupied run, but ONLY when arriving straight AND not right
             # after another tunnel (so each tile has a single role: entrance OR exit).
-            elif nb not in prev and nb in occ and nb != goal and came_dir == d and came_via != "jump":
+            elif (nb not in prev and nb in occ and nb != goal and came_dir == d
+                  and came_via != "jump" and not axis_blocks(nb, d)):
                 m = 2
                 while m <= max_gap:
                     ex = (cur[0] + dx * m, cur[1] + dy * m)
@@ -821,6 +836,8 @@ def _pipe_path(occ, starts, goal, bounds, max_gap=PIPE_UG_GAP, step_goal=False, 
                         if ex not in prev and not (step_goal and ex == goal):
                             prev[ex] = (cur, d, "jump")
                             q.append(ex)
+                        break
+                    if axis_blocks(ex, d):           # same-axis p2g inside the run -> abort jump
                         break
                     m += 1
     return None
@@ -1012,10 +1029,24 @@ def _emit_fluids(graph, layout, bodies, occ):
             return True                                       # endpoints already 4-adjacent
         return _lay_belt_path(layout, occ, path[1:-1], {"role": "pipe", "net": cur_src}, pipe=True) is not None
 
+    def _conn_maps(net):
+        """Connection-aware BFS inputs: which sides each net tile can extend from (a p2g only its
+        open mouth), and every p2g's axis dir (so tunnels don't jump over and steal a pairing)."""
+        pipe_at = {(e.x, e.y): e for e in layout.entities if e.proto in (PIPE, PIPE_TO_GROUND)}
+        sdirs = {}
+        for t in net:
+            e = pipe_at.get(t)
+            sdirs[t] = ((e.direction or 0,) if (e is not None and e.proto == PIPE_TO_GROUND)
+                        else (EAST, SOUTH, NORTH, WEST))
+        p2gd = {t: (e.direction or 0) for t, e in pipe_at.items() if e.proto == PIPE_TO_GROUND}
+        return sdirs, p2gd
+
     def _link(net, db, mdir, cross):
         """(a) step the run onto the box's plain pipe; else (b) tunnel a p2g INTO the box to a
         routed exit. With cross=crossable the run may also dive under belts. Grows net, ret bool."""
-        path = _pipe_path(occ, net, db, bounds, step_goal=True, cross=cross)    # (a) step onto box
+        sdirs, p2gd = _conn_maps(net)
+        path = _pipe_path(occ, net, db, bounds, step_goal=True, cross=cross,    # (a) step onto box
+                          start_dirs=sdirs, p2g_dir=p2gd)
         if path is not None and _lay_interior(path, cross):
             net |= set(path)
             return True
@@ -1029,7 +1060,8 @@ def _emit_fluids(graph, layout, bodies, occ):
             ex = (db[0] + dx * m, db[1] + dy * m)
             if ex in occ:
                 continue
-            path = _pipe_path(occ, net, ex, bounds, step_goal=True, cross=cross)
+            path = _pipe_path(occ, net, ex, bounds, step_goal=True, cross=cross,
+                              start_dirs=sdirs, p2g_dir=p2gd)
             if path is None:
                 continue
             bp = layout.add(PlacedEntity(PIPE_TO_GROUND, db[0], db[1], direction=mdir,
