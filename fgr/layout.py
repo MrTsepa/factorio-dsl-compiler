@@ -1003,8 +1003,11 @@ def _emit_fluids(graph, layout, bodies, occ):
         with belt-crossing enabled, dive each crossed belt under it first."""
         if cross:
             for t in path[1:-1]:
-                if t in belt_at and not dive(t):
-                    return False
+                if t in belt_at:
+                    if not dive(t):
+                        return False
+                elif t in occ:
+                    return False        # a prior dive turned this into an underground -> abort
         if len(path) < 3:
             return True                                       # endpoints already 4-adjacent
         return _lay_belt_path(layout, occ, path[1:-1], {"role": "pipe", "net": cur_src}, pipe=True) is not None
