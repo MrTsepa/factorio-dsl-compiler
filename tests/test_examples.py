@@ -27,10 +27,10 @@ KNOWN_FAILING = {
     "stress/deepchain_2.fgr",
     "stress/fluids_5.fgr",
     "stress/fluids_6.fgr", "stress/fluids_7.fgr",
-    "stress/highfanin_2.fgr", "stress/highfanin_6.fgr",
+    "stress/highfanin_6.fgr",
     "stress/reconverge_3.fgr",
     "stress/scale_1.fgr", "stress/scale_2.fgr", "stress/scale_3.fgr",
-    "stress/scale_5.fgr", "stress/scale_6.fgr", "stress/science_6.fgr",
+    "stress/scale_5.fgr", "stress/scale_6.fgr",
 }
 
 
