@@ -977,9 +977,10 @@ def _emit_fluids(graph, layout, bodies, occ):
         occ |= avoid
         before = len(layout.entities)
         net = {seed[src]}
-        for cb in cons_boxes[src]:
-            if cb is None:
-                continue
+        # link NEAREST consumer boxes first: short links stay compact and don't sprawl the net
+        # across the field, leaving room for the farther ones (greedy, but measurably better).
+        for cb in sorted((c for c in cons_boxes[src] if c is not None),
+                         key=lambda c: abs(c[0][0] - seed[src][0]) + abs(c[0][1] - seed[src][1])):
             db, mdir = cb
             path = _pipe_path(occ, net, db, bounds, step_goal=True)        # (a) step onto box
             if path is not None and _lay_interior(path):
