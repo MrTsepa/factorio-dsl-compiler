@@ -24,7 +24,7 @@ def _rel(p):
 # v2 doesn't yet fully verify these (tracked tail). Keep sorted; delete as they get fixed.
 KNOWN_FAILING = {
     "complex/flying_robot_frame.fgr",
-    "stress/deepchain_2.fgr", "stress/deepchain_5.fgr",
+    "stress/deepchain_2.fgr",
     "stress/fluids_5.fgr",
     "stress/fluids_6.fgr", "stress/fluids_7.fgr",
     "stress/highfanin_2.fgr", "stress/highfanin_6.fgr",
