@@ -12,7 +12,6 @@ pass rate and lists the failing cases so they're easy to find.
 """
 from __future__ import annotations
 
-import io
 import sys
 import time
 from pathlib import Path
