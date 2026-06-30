@@ -592,19 +592,31 @@ def compile_graph(graph: Graph) -> Layout:
         occ.add((rx, Rp[e.src] - 2))
 
     # --- emit, diving discipline by phase order: trunks, feeds, risers ---
-    # 1) trunks (horizontal lanes, one per producer). The terminal belt TURNS SOUTH so it never
-    # faces a foreign lane east of it (which would weld a spurious lane). We lay the turn, then
-    # DROP the extra tail tile below it: the terminal is a clean 1-tile south turn into empty
-    # (still tapped by the last consumer), not a protruding dead-end stub. That tail tile carried
-    # nothing downstream, so removing it cannot change any lane.
+    item_indeg: dict[str, int] = {}                    # item lanes into each consumer
+    for e in graph.edges:
+        if not e.fluid:
+            item_indeg[e.dst] = item_indeg.get(e.dst, 0) + 1
+    # 1) trunks (one horizontal lane per producer). The terminal TURNS UP into its last consumer's
+    # riser -- a plain belt corner, so that consumer needs NO tap inserter (the cleanest shape) --
+    # but only when the consumer is UNCONGESTED (<=2 item inputs), so a busy node keeps its port
+    # corridor free for its other inputs. Otherwise the terminal TURNS SOUTH (tapped by the last
+    # consumer) into an empty reserved tile -- never a protruding dead-end stub.
+    inline_last: dict[str, tuple] = {}
     for p in producers:
         xs = [vx_riser[(p, e.dst)] for e in consumers_of[p]] + [vx_feed[p]]
         x0, x1 = min(xs), max(xs)
+        le = max(consumers_of[p], key=lambda e: vx_riser[(p, e.dst)])
+        if vx_riser[(p, le.dst)] == x1 and item_indeg.get(le.dst, 0) <= 2:   # turn UP into it
+            occ.discard((x1, Rp[p] - 1))               # the up-turn belt takes the tap tile
+            if _lay_polyline(layout, occ, [(x0, Rp[p]), (x1, Rp[p]), (x1, Rp[p] - 1)],
+                             {"role": "trunk", "src": p}) is not None:
+                inline_last[p] = (le.src, le.dst)
+                continue
+            occ.add((x1, Rp[p] - 1))                   # up-turn unplaceable -> restore, south-turn
         if _lay_polyline(layout, occ, [(x0, Rp[p]), (x1, Rp[p]), (x1, Rp[p] + 1)],
                          {"role": "trunk", "src": p}) is not None:
-            # remove the tail BELT but KEEP its tile reserved in occ, so downstream routing is
-            # byte-identical to the south-tail version (zero regression) -- only the dead-end
-            # belt entity is gone; the terminal still turns south into a now-empty reserved tile.
+            # drop the tail BELT but KEEP its tile reserved -> downstream routing byte-identical
+            # (zero regression); only the dead-end stub belt is gone.
             layout.entities = [e for e in layout.entities
                                if not (e.proto == BELT and (e.x, e.y) == (x1, Rp[p] + 1)
                                        and e.meta.get("src") == p)]
@@ -628,6 +640,7 @@ def compile_graph(graph: Graph) -> Layout:
         p, c = e.src, e.dst
         rx = vx_riser[(p, c)]
         tap, start = (rx, Rp[p] - 1), (rx, Rp[p] - 2)
+        inline = inline_last.get(p) == (p, c)          # trunk already turned up -> no tap inserter
         occ.discard(start)                             # free our reserved start for the riser
         cand = [(a, i, d) for a, i, d in _input_slots(bodies[c])
                 if i not in occ and i not in used_ins[c] and a not in occ]
@@ -650,11 +663,12 @@ def compile_graph(graph: Graph) -> Layout:
                     break
                 occ.add(anchor)
         occ -= (reserved - ({laid[0]} if laid else set()))   # free unused inserter tiles
-        if laid is not None:                           # connect: tap the trunk + input inserter
+        if laid is not None:                           # connect: input inserter (+ tap unless inline)
             ins, d = laid
-            layout.add(PlacedEntity(INSERTER, tap[0], tap[1], direction=SOUTH,
-                                    meta={"role": "tap", "edge": (p, c)}))
-            occ.add(tap)
+            if not inline:                             # inline = trunk flows straight up, no tap
+                layout.add(PlacedEntity(INSERTER, tap[0], tap[1], direction=SOUTH,
+                                        meta={"role": "tap", "edge": (p, c)}))
+                occ.add(tap)
             layout.add(PlacedEntity(INSERTER, ins[0], ins[1], direction=d,
                                     meta={"role": "in", "edge": (p, c)}))
             occ.add(ins)
