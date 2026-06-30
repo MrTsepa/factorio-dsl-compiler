@@ -12,12 +12,12 @@ unchanged — the verifier remains the independent oracle). Regenerate the numbe
 
 | Suite | Result |
 |-------|--------|
-| **pytest** | **87 passed, 25 xfailed** (green) |
+| **pytest** | **88 passed, 24 xfailed** (green) |
 | **All 49 examples compile** (no crashes) | **49 / 49** |
-| **Examples that fully verify** | **29 / 49** |
+| **Examples that fully verify** | **30 / 49** |
 | &nbsp;&nbsp;• basic | 6 / 6 |
 | &nbsp;&nbsp;• complex (hand-authored) | 4 / 6 |
-| &nbsp;&nbsp;• stress (generated DAGs) | 19 / 37 |
+| &nbsp;&nbsp;• stress (generated DAGs) | 20 / 37 |
 
 A "pass" means the layout was *independently graded* by `fgr/verify.py` as physically
 realising the spec: every declared belt/pipe lane connects, nothing spurious, no overlaps,
@@ -87,11 +87,18 @@ All remaining failures are **routing through a dense field**, never the verifier
   (`fluids_3`, `reconverge_4`). The residue is boxes walled by *machines* (not belts), which
   the corridor can't open — that needs **fluid-aware placement** (cluster fluid-connected
   machines), a structural change.
-- **Very high fan-in to small sinks** (`wide_reconverge`: 7 inputs into one 1×1 chest) —
-  exceeds the perimeter's port count; needs a **collector-belt merge** (several lanes onto
-  one belt feeding a single port).
-- **Congested reconvergence** (`reconverge_1`, `scale_*`) — a consumer's perimeter is
-  crowded by its own converging inputs, so the last riser finds no free, reachable port.
+- **Very high fan-in to a 1×1 chest** — a 1×1 output chest has only 4 inserter faces, so an
+  in-degree > 4 can't be wired directly. Five cases hit this: `wide_reconverge` (out, deg 8),
+  `reconverge_1` (devices, 6), `scale_2` (lab, 6), `scale_5` (machines_out 6, modules_out 7).
+  The fix is a **collector-belt merge** (the overflow producers flow onto one belt feeding a
+  single port) — a well-scoped next feature.
+- **High fan-in to a 3×3 assembler** (`flying_robot_frame` frame deg 4, `scale_2` engine/frame,
+  `scale_5` am2/beacon) — 12 perimeter ports exist, but the last riser can't *route* to a free
+  one through the crowded approaches: a routing problem, not a port-count one.
+- **Spurious fluid lanes from stacked machines** (`reconverge_3`, `fluids_6`, `scale_*`) — two
+  fluid machines stacked so a differing-fluid box pair sits 4-adjacent and welds. Weld-aware
+  box selection (pick the non-touching box) fixed the avoidable ones (`fluids_4`); the residue
+  is machines whose *both* box columns weld, which needs a 1-row placement gap.
 
 Why the tunnel-reach asymmetry settles the routing order: a **pipe-to-ground reaches 10
 tiles, an underground belt only 5**, so pipes cross the belt field far more easily than belts
