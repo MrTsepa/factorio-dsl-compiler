@@ -12,12 +12,12 @@ unchanged — the verifier remains the independent oracle). Regenerate the numbe
 
 | Suite | Result |
 |-------|--------|
-| **pytest** | **88 passed, 24 xfailed** (green) |
+| **pytest** | **93 passed, 19 xfailed** (green) |
 | **All 49 examples compile** (no crashes) | **49 / 49** |
-| **Examples that fully verify** | **30 / 49** |
+| **Examples that fully verify** | **34 / 49** |
 | &nbsp;&nbsp;• basic | 6 / 6 |
-| &nbsp;&nbsp;• complex (hand-authored) | 4 / 6 |
-| &nbsp;&nbsp;• stress (generated DAGs) | 20 / 37 |
+| &nbsp;&nbsp;• complex (hand-authored) | 5 / 6 |
+| &nbsp;&nbsp;• stress (generated DAGs) | 23 / 37 |
 
 A "pass" means the layout was *independently graded* by `fgr/verify.py` as physically
 realising the spec: every declared belt/pipe lane connects, nothing spurious, no overlaps,
@@ -76,41 +76,49 @@ and attached at real boxes. Out of its scope (by design, tracked):
   oracle (which holds no hard-coded recipe table).
 - **Throughput** — connectivity only: that an item *can* reach a machine, not the rate.
 
+## What landed (the fixes that raised the pass rate)
+
+- **Approach corridor** — each fluid box's short approach is reserved off-limits to belts during
+  item routing (we know the boxes up front), so belts route around/under and pipes reach the box.
+- **Weld-aware box selection** — when two fluid machines stack with facing boxes 4-adjacent,
+  pick each machine's *non-touching* box so the two networks don't weld into a spurious lane.
+- **Collector-belt merge** — a 1×1 sink (4 faces) with > 4 item inputs routes all its producer
+  risers onto one vertical collector belt (merged top-down, planar) feeding it through a single
+  inserter. Fixed `wide_reconverge` (deg 8) and `reconverge_1` (deg 6).
+- **Nearest-first fluid links** — a source that fans out to many consumers links its *closest*
+  boxes first, so its net stays compact instead of sprawling and self-blocking the far links.
+- **Belt-dive crossing (fallback)** — when a fluid link can't step or tunnel to its box, it may
+  cross a belt by sinking that straight run underground (`ug-in [buried] ug-out`) and taking the
+  freed surface — perpendicular-only, straight-run-fed-straight, never over a tapped belt, and it
+  aborts cleanly (no overlap) if a crossed tile was already converted.
+
 ## Where it still fails (the tracked tail)
 
 All remaining failures are **routing through a dense field**, never the verifier or the model:
 
-- **Complex multi-fluid chains** (oil/chem refineries: `fluids_*`, `science_*`, several
-  `highfanin_*`/`scale_*`) — machine→machine fluid lanes whose boxes get walled in. Keeping
-  each fluid box's **approach corridor clear of belts** (reserved during item routing, since
-  we know the boxes up front; belts then route around or dive under it) recovered several
-  (`fluids_3`, `reconverge_4`). The residue is boxes walled by *machines* (not belts), which
-  the corridor can't open — that needs **fluid-aware placement** (cluster fluid-connected
-  machines), a structural change.
-- **Very high fan-in to a 1×1 chest** — a 1×1 output chest has only 4 inserter faces, so an
-  in-degree > 4 can't be wired directly. Five cases hit this: `wide_reconverge` (out, deg 8),
-  `reconverge_1` (devices, 6), `scale_2` (lab, 6), `scale_5` (machines_out 6, modules_out 7).
-  The fix is a **collector-belt merge** (the overflow producers flow onto one belt feeding a
-  single port) — a well-scoped next feature.
-- **High fan-in to a 3×3 assembler** (`flying_robot_frame` frame deg 4, `scale_2` engine/frame,
-  `scale_5` am2/beacon) — 12 perimeter ports exist, but the last riser can't *route* to a free
-  one through the crowded approaches: a routing problem, not a port-count one.
-- **Spurious fluid lanes from stacked machines** (`reconverge_3`, `fluids_6`, `scale_*`) — two
-  fluid machines stacked so a differing-fluid box pair sits 4-adjacent and welds. Weld-aware
-  box selection (pick the non-touching box) fixed the avoidable ones (`fluids_4`); the residue
-  is machines whose *both* box columns weld, which needs a 1-row placement gap.
+- **Dense multi-fluid reach** (`deepchain_2/5`, `highfanin_2/6`, `science_6`, the unconn parts of
+  `fluids_6`, `reconverge_3`, `scale_1/6`, `fluids_7`) — a few machine→machine fluid lanes whose
+  boxes are *reachable* (free neighbours) but the greedy per-source pipe router can't find a path
+  through the packed field. Needs a stronger (backtracking/rip-up) pipe router or fluid-aware
+  placement; an exhaustive per-box retry and the belt-dive fallback are already in.
+- **High fan-in to a 3×3 assembler** (`flying_robot_frame`, `scale_2`, `scale_5`) — 12 perimeter
+  ports exist but the last riser can't *route* to a free one: the producer trunk ends far from the
+  consumer and its end-of-trunk flow direction blocks a clean extension. Needs a riser-column /
+  trunk-extension improvement (a rescue pass was tried; it needs the trunk to end flowing toward
+  the free port).
+- **Residual welds** (`reconverge_3`, `fluids_6`, `scale_6`) — stacked fluid machines whose *both*
+  box columns are 4-adjacent. A 1-row placement gap fixes the weld but, applied globally, the
+  extra spacing regressed 9 other cases (longer pipes) — it needs to be applied only to the
+  welding pair, not every fluid machine.
+- **Corridor side-effect** (`fluids_5` `explosives->explosives_out`, in-deg 1) — the K=5 approach
+  corridor reserves a tile this lone item lane needed; a per-box adaptive corridor would recover it.
 
-Why the tunnel-reach asymmetry settles the routing order: a **pipe-to-ground reaches 10
-tiles, an underground belt only 5**, so pipes cross the belt field far more easily than belts
-cross a pipe field — routing **items first, fluids last** (the current order) is therefore
-optimal, and giving fluids priority makes items the ones that can't cross (measured worse).
-Two further levers were explored and found not to pay off *here*: **rotating machines** off
-the default north — fluid boxes must stay on the N/S faces because E/W are the item-inserter
-faces, so the only safe flip (N↔S) just trades one congested side for the other; and a
-**belt-dive crossing** (sink a straight belt run underground so a pipe crosses on top) — a
-sound technique, but redundant with the approach-corridor, which already prevents the
-belt-walls it would cross. Closing the rest needs the two structural changes above
-(fluid-aware placement + collector merges).
+Why the tunnel-reach asymmetry settles the routing order: a **pipe-to-ground reaches 10 tiles, an
+underground belt only 5**, so pipes cross the belt field far more easily than belts cross a pipe
+field — routing **items first, fluids last** (the current order) is optimal; giving fluids priority
+makes items the ones that can't cross (measured worse). **Rotating machines** off the default north
+doesn't help either: fluid boxes must stay on N/S (E/W are the item-inserter faces), so the only
+safe flip (N↔S) just trades one congested side for the other.
 
 ## Tests
 
