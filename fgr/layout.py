@@ -495,8 +495,19 @@ def compile_graph(graph: Graph) -> Layout:
     for odrop, ianch, edge in direct_belts:
         occ.discard(odrop)
         occ.discard(ianch)
-        if not _lay_polyline(layout, occ, [odrop, ianch], {"role": "direct", "edge": edge}):
-            raise LayoutError(f"could not lay direct lane {edge[0]}->{edge[1]}")
+        if _lay_polyline(layout, occ, [odrop, ianch], {"role": "direct", "edge": edge}) is not None:
+            continue
+        lb = (min(odrop[0], ianch[0]) - 4, max(odrop[0], ianch[0]) + 4,    # reroute around any
+              min(odrop[1], ianch[1]) - 6, max(odrop[1], ianch[1]) + 6)    # obstacle (e.g. a pipe)
+        path = _pipe_path(occ, {odrop}, ianch, lb, max_gap=UG_MAX_GAP)
+        if path and _lay_belt_path(layout, occ, path, {"role": "direct", "edge": edge}):
+            continue
+        oi, ii = (odrop[0] - 1, odrop[1]), (ianch[0] + 1, ianch[1])        # non-fatal: drop the
+        layout.entities = [e for e in layout.entities                     # two inserters (lane
+                           if not (e.proto == INSERTER and (e.x, e.y) in (oi, ii))]  # left unrouted)
+        occ.discard(oi)
+        occ.discard(ii)
+        used_ins[edge[1]].discard(ii)
 
     # channel output inserters (only producers with channel edges), on a free east tile
     out_drop: dict[str, tuple[int, int]] = {}
@@ -620,20 +631,30 @@ def compile_graph(graph: Graph) -> Layout:
                                        and e.meta.get("src") == p)]
         else:
             _lay_polyline(layout, occ, [(x0, Rp[p]), (x1, Rp[p])], {"role": "trunk", "src": p})
-    # 2) feeds (producer body -> its trunk), jogging to the feed column then diving down
+    # BFS reroute bounds (feeds + risers): the whole plane around the build.
+    bx_max = max(b.x + b.size[0] for b in bodies.values())
+    by_min = min(b.y for b in bodies.values())
+    bfs_bounds = (-2, bx_max + 4, by_min - 8, band_bot + 3 * len(row_end) + 6)
+    # 2) feeds (producer body -> its trunk): straight jog to the feed column, else BFS reroute
+    # (diving under any pipe/belt), else non-fatal -- drop the out-inserter (lanes left unrouted).
     for p in producers:
         drop = out_drop[p]
         occ.discard(drop)
         fx = vx_feed[p]
-        pts = [drop, (fx, drop[1]), (fx, Rp[p] - 1)] if fx != drop[0] else [drop, (fx, Rp[p] - 1)]
-        if not _lay_polyline(layout, occ, pts, {"role": "feed", "src": p}):
-            raise LayoutError(f"could not lay feed for {p!r}")
+        target = (fx, Rp[p] - 1)
+        occ.discard(target)
+        pts = [drop, (fx, drop[1]), target] if fx != drop[0] else [drop, target]
+        if _lay_polyline(layout, occ, pts, {"role": "feed", "src": p}) is not None:
+            continue
+        path = _pipe_path(occ, {drop}, target, bfs_bounds, max_gap=UG_MAX_GAP)
+        if path and _lay_belt_path(layout, occ, path, {"role": "feed", "src": p}):
+            continue
+        oi = (drop[0] - 1, drop[1])
+        layout.entities = [e for e in layout.entities if not (e.proto == INSERTER and (e.x, e.y) == oi)]
+        occ.discard(oi)
     # 3) risers: tap the producer trunk, then route up to a consumer input port. Try the
     # candidate ports (west bottom-first, then south/north/east) and use the FIRST whose
     # riser lays cleanly -- so a riser never has to cross a direct belt right at its corner.
-    bx_max = max(b.x + b.size[0] for b in bodies.values())
-    by_min = min(b.y for b in bodies.values())
-    bfs_bounds = (-2, bx_max + 4, by_min - 8, band_bot + 3 * len(row_end) + 6)
     for e in ch_edges:
         p, c = e.src, e.dst
         rx = vx_riser[(p, c)]
