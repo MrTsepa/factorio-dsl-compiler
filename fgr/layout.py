@@ -418,10 +418,18 @@ def compile_graph(graph: Graph) -> Layout:
     # (1x1 producers qualify only when single-consumer, so their lone east tile isn't
     # claimed by both a direct belt and a channel feed.)
     out_count: dict[str, int] = {}
+    in_count: dict[str, int] = {}
     for e in item_edges:
         out_count[e.src] = out_count.get(e.src, 0) + 1
+        in_count[e.dst] = in_count.get(e.dst, 0) + 1
+    # a 1x1 sink has only 4 inserter faces; > 4 item inputs need a COLLECTOR belt (below). Force
+    # all its inputs through the channel (no direct belt) so the collector owns the whole sink.
+    collector_dst = {n for n in in_count if in_count[n] > 4
+                     and SIZE[_node_proto(graph, n, fluid_sinks)] == (1, 1)}
 
     def _is_direct(e):
+        if e.dst in collector_dst:
+            return False
         if col[e.dst] != col[e.src] + 1 or cr[e.dst] != cr[e.src]:
             return False
         return SIZE[_node_proto(graph, e.src, fluid_sinks)][0] == 3 or out_count[e.src] == 1
@@ -634,7 +642,8 @@ def compile_graph(graph: Graph) -> Layout:
         xs = [vx_riser[(p, e.dst)] for e in consumers_of[p]] + [vx_feed[p]]
         x0, x1 = min(xs), max(xs)
         le = max(consumers_of[p], key=lambda e: vx_riser[(p, e.dst)])
-        if vx_riser[(p, le.dst)] == x1:                # turn UP into the last consumer's riser
+        # turn UP into the last consumer's riser (but NOT into a collector sink -- it taps normally)
+        if vx_riser[(p, le.dst)] == x1 and le.dst not in collector_dst:
             occ.discard((x1, Rp[p] - 1))               # the up-turn belt takes the tap tile
             if _lay_polyline(layout, occ, [(x0, Rp[p]), (x1, Rp[p]), (x1, Rp[p] - 1)],
                              {"role": "trunk", "src": p}) is not None:
@@ -672,11 +681,50 @@ def compile_graph(graph: Graph) -> Layout:
         oi = (drop[0] - 1, drop[1])
         layout.entities = [e for e in layout.entities if not (e.proto == INSERTER and (e.x, e.y) == oi)]
         occ.discard(oi)
+    # 2b) COLLECTOR MERGE: a 1x1 sink has only 4 inserter faces, so > 4 channel inputs can't be
+    # wired one-port-each. Build a vertical collector belt the producer risers merge onto (from
+    # the west, top-down in vx order so they stay planar) and feed the sink through ONE inserter.
+    collector_edges: set = set()
+    for c in sorted(collector_dst):
+        ce = sorted((e for e in ch_edges if e.dst == c), key=lambda e: vx_riser[(e.src, e.dst)])
+        cb = bodies[c]
+        if not ce:
+            continue
+        cx, cy, N = cb.x, cb.y, len(ce)
+        Xc = cx - 2
+        rows = [cy - N + 1 + i for i in range(N)]              # westmost vx -> topmost row
+        feed = (cx - 1, cy)
+        if feed in occ or any((Xc, r) in occ or (Xc - 1, r) in occ for r in rows):
+            continue                                           # no room -> leave to normal risers
+        for r in rows:                                         # the collector belt, flowing south
+            layout.add(PlacedEntity(BELT, Xc, r, direction=SOUTH, meta={"role": "collector", "dst": c}))
+            occ.add((Xc, r))
+        layout.add(PlacedEntity(INSERTER, feed[0], feed[1], direction=WEST,
+                                meta={"role": "in", "edge": (ce[0].src, c)}))   # collector -> sink
+        occ.add(feed)
+        for i, e in enumerate(ce):                             # tap each trunk, riser east into collector
+            p, r, vx = e.src, rows[i], vx_riser[(e.src, c)]
+            tap, start, end = (vx, Rp[p] - 1), (vx, Rp[p] - 2), (Xc - 1, r)
+            occ.discard(start)
+            occ.discard(end)
+            pts = [start, (vx, r), end] if vx != Xc - 1 else [start, end]
+            if _lay_polyline(layout, occ, pts, {"role": "riser", "edge": (p, c)}) is None:
+                path = _pipe_path(occ, {start}, end, bfs_bounds, max_gap=UG_MAX_GAP)
+                if not (path and _lay_belt_path(layout, occ, path, {"role": "riser", "edge": (p, c)})):
+                    occ.add(start)
+                    continue
+            layout.add(PlacedEntity(INSERTER, tap[0], tap[1], direction=SOUTH,
+                                    meta={"role": "tap", "edge": (p, c)}))
+            occ.add(tap)
+        collector_edges |= {(e.src, c) for e in ce}
+
     # 3) risers: tap the producer trunk, then route up to a consumer input port. Try the
     # candidate ports (west bottom-first, then south/north/east) and use the FIRST whose
     # riser lays cleanly -- so a riser never has to cross a direct belt right at its corner.
     for e in ch_edges:
         p, c = e.src, e.dst
+        if (p, c) in collector_edges:
+            continue                                           # handled by the collector above
         rx = vx_riser[(p, c)]
         tap, start = (rx, Rp[p] - 1), (rx, Rp[p] - 2)
         inline = inline_last.get(p) == (p, c)          # trunk already turned up -> no tap inserter
