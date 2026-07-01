@@ -27,9 +27,8 @@ KNOWN_FAILING = {
     "stress/highfanin_6.fgr",
     "stress/reconverge_3.fgr",
     "stress/scale_1.fgr", "stress/scale_3.fgr", "stress/scale_4.fgr",
-    "stress/scale_5.fgr", "stress/scale_6.fgr",
-    "stress/science_1.fgr",   # scale_4 + science_1 regressed under the FLUID_VGAP spacing (fragile
-    #                           belt routes) -- tracked, to fix; net still +3 (37 -> 40).
+    "stress/scale_5.fgr", "stress/scale_6.fgr",   # scale_4 regressed under FLUID_VGAP (fragile
+    #                                               belt route) -- tracked, to fix.
 }
 
 
