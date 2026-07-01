@@ -24,7 +24,6 @@ def _rel(p):
 # v2 doesn't yet fully verify these (tracked tail). Keep sorted; delete as they get fixed.
 KNOWN_FAILING = {
     "stress/fluids_7.fgr",
-    "stress/highfanin_6.fgr",
     "stress/scale_1.fgr",
     "stress/scale_5.fgr",
 }
