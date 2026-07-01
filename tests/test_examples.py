@@ -25,9 +25,8 @@ def _rel(p):
 KNOWN_FAILING = {
     "stress/fluids_7.fgr",
     "stress/highfanin_6.fgr",
-    "stress/reconverge_3.fgr",
-    "stress/scale_1.fgr", "stress/scale_3.fgr",
-    "stress/scale_5.fgr", "stress/scale_6.fgr",
+    "stress/scale_1.fgr",
+    "stress/scale_5.fgr",
 }
 
 
