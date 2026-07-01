@@ -397,14 +397,6 @@ def _input_slots(body):
     return slots
 
 
-def _output_drop(body):
-    """The output port on a body's east face: (drop_tile, inserter_tile)."""
-    bx, by = body.x, body.y
-    bw, bh = body.size
-    r = bh // 2
-    return ((bx + bw + 1, by + r), (bx + bw, by + r))
-
-
 # ---------------------------------------------------------------------------
 # Pass 4 + orchestration.
 # ---------------------------------------------------------------------------
@@ -608,12 +600,9 @@ def _compile_at(graph: Graph, vgap: int, fluid_order=None) -> Layout:
     for odrop, ianch, edge in direct_belts:
         occ.discard(odrop)
         occ.discard(ianch)
-        if _lay_polyline(layout, occ, [odrop, ianch], {"role": "direct", "edge": edge}) is not None:
-            continue
         lb = (min(odrop[0], ianch[0]) - 4, max(odrop[0], ianch[0]) + 4,    # reroute around any
               min(odrop[1], ianch[1]) - 6, max(odrop[1], ianch[1]) + 6)    # obstacle (e.g. a pipe)
-        path = _pipe_path(occ, {odrop}, ianch, lb, max_gap=UG_MAX_GAP)
-        if path and _lay_belt_path(layout, occ, path, {"role": "direct", "edge": edge}):
+        if _route_belt(layout, occ, [odrop, ianch], {"role": "direct", "edge": edge}, lb):
             continue
         oi, ii = (odrop[0] - 1, odrop[1]), (ianch[0] + 1, ianch[1])        # non-fatal: drop the
         layout.entities = [e for e in layout.entities                     # two inserters (lane
@@ -769,11 +758,7 @@ def _compile_at(graph: Graph, vgap: int, fluid_order=None) -> Layout:
         occ.discard(drop)
         occ.discard(target)
         pts = [drop, (fx, drop[1]), target] if fx != drop[0] else [drop, target]
-        ok = _lay_polyline(layout, occ, pts, {"role": "feed", "src": p}) is not None
-        if not ok:
-            path = _pipe_path(occ, {drop}, target, bfs_bounds, max_gap=UG_MAX_GAP)
-            ok = bool(path and _lay_belt_path(layout, occ, path, {"role": "feed", "src": p}))
-        if ok:
+        if _route_belt(layout, occ, pts, {"role": "feed", "src": p}, bfs_bounds):
             ent_tiles = {(e.x, e.y) for e in layout.entities}   # so the next feed sees ours
             continue
         oi = (drop[0] - 1, drop[1])
@@ -806,11 +791,9 @@ def _compile_at(graph: Graph, vgap: int, fluid_order=None) -> Layout:
             occ.discard(start)
             occ.discard(end)
             pts = [start, (vx, r), end] if vx != Xc - 1 else [start, end]
-            if _lay_polyline(layout, occ, pts, {"role": "riser", "edge": (p, c)}) is None:
-                path = _pipe_path(occ, {start}, end, bfs_bounds, max_gap=UG_MAX_GAP)
-                if not (path and _lay_belt_path(layout, occ, path, {"role": "riser", "edge": (p, c)})):
-                    occ.add(start)
-                    continue
+            if not _route_belt(layout, occ, pts, {"role": "riser", "edge": (p, c)}, bfs_bounds):
+                occ.add(start)
+                continue
             layout.add(PlacedEntity(INSERTER, tap[0], tap[1], direction=SOUTH,
                                     meta={"role": "tap", "edge": (p, c)}))
             occ.add(tap)
@@ -1011,17 +994,15 @@ def _lay_belt_path(layout, occ, path, meta, pipe=False):
     return used
 
 
-def _waypoints(path):
-    """Collapse a tile path to corner waypoints (where direction changes)."""
-    if len(path) <= 2:
-        return list(path)
-    wp = [path[0]]
-    for i in range(1, len(path) - 1):
-        if (path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]) != \
-           (path[i + 1][0] - path[i][0], path[i + 1][1] - path[i][1]):
-            wp.append(path[i])
-    wp.append(path[-1])
-    return wp
+def _route_belt(layout, occ, pts, meta, bounds, max_gap=UG_MAX_GAP):
+    """Route one belt lane from ``pts[0]`` to ``pts[-1]``: try the fast deterministic L-route
+    (``pts`` as waypoints) first, else a bounded BFS reroute that dives under obstacles. Returns
+    True iff it laid. Endpoints must already be freed in ``occ``. The shared 2-step used by every
+    belt lane (direct, feed, collector riser) -- so they all get the same reroute behaviour."""
+    if _lay_polyline(layout, occ, pts, meta) is not None:
+        return True
+    path = _pipe_path(occ, {pts[0]}, pts[-1], bounds, max_gap=max_gap)
+    return bool(path and _lay_belt_path(layout, occ, path, meta))
 
 
 def _emit_fluids(graph, layout, bodies, occ, fluid_order=None):
