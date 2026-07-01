@@ -408,29 +408,84 @@ def _output_drop(body):
 # ---------------------------------------------------------------------------
 # Pass 4 + orchestration.
 # ---------------------------------------------------------------------------
+def _fluid_order_candidates(graph):
+    """Deterministic alternative fluid-net routing orders for the co-router (excludes the default).
+    A small, diverse set -- reverse, by consumer fan-out, then hash-seeded shuffles for coverage --
+    since most orders route a contended field fine; only the unlucky default needs replacing."""
+    srcs, seen = [], set()
+    for e in graph.edges:
+        if e.fluid and e.src not in seen:
+            seen.add(e.src)
+            srcs.append(e.src)
+    if len(srcs) < 2:
+        return
+    ct: dict = {}
+    for e in graph.edges:
+        if e.fluid:
+            ct[e.src] = ct.get(e.src, 0) + 1
+    yield list(reversed(srcs))
+    yield sorted(srcs, key=lambda s: ct.get(s, 0))          # least-fanout net first
+    yield sorted(srcs, key=lambda s: -ct.get(s, 0))         # most-fanout net first
+    seed = sum((i + 1) * ord(c) for i, s in enumerate(srcs) for c in s)
+    for k in range(1, 9):                                   # deterministic shuffles (no RNG state)
+        seed = (seed + k * 2654435761) & 0x7fffffff
+        arr, s2 = list(srcs), seed
+        for i in range(len(arr) - 1, 0, -1):
+            s2 = (s2 * 1103515245 + 12345) & 0x7fffffff
+            j = s2 % (i + 1)
+            arr[i], arr[j] = arr[j], arr[i]
+        yield arr
+
+
 def compile_graph(graph: Graph, vgap: int | None = None) -> Layout:
-    """Generate a candidate :class:`Layout` (the v2 reference generator). ADAPTIVE by default:
-    compile at the base fluid gap and, only if the result doesn't fully verify, retry with more
-    vertical clearance between stacked fluid machines (dense pipe fields route far better with
-    room) -- returning the first layout that verifies, else the one with the fewest failures. So
-    graphs that route tight stay compact; only boxed-in ones spread. Pass ``vgap`` to force a gap."""
+    """Generate a candidate :class:`Layout` (the v2 reference generator).
+
+    Two adaptive search axes, both engaged only when the plain compile doesn't verify (so easy
+    graphs stay fast, returning on the first try):
+
+      * GAP    -- retry with more vertical clearance between stacked fluid machines (dense pipe
+                  fields route far better with room).
+      * ORDER  -- (co-router) retry routing the fluid networks in different orders. Nets route
+                  sequentially, each avoiding earlier ones, so a late net can get boxed out of a
+                  contended box; a different order lets it claim its corridor first. Only searched
+                  when the residual failure is fluid-connectivity (ordering can't fix belt lanes).
+
+    Returns the first fully-verifying layout, else the fewest-failure one. Pass ``vgap`` to force
+    a single gap (and the module-default net order)."""
     if vgap is not None:
         return _compile_at(graph, vgap)
     from .verify import verify                       # lazy: verify imports layout at module load
-    best, best_score = None, (1 << 30)
-    for g in (FLUID_VGAP, 6, 10, 14):
-        lay = _compile_at(graph, g)
-        rep = verify(graph, lay)
-        if rep.ok:
-            return lay
-        score = sum(not c.ok for c in rep.checks)    # fewer failing checks = better
-        if score < best_score:
-            best, best_score = lay, score
+    gaps = (FLUID_VGAP, 6, 10, 14)
+    best, best_score, best_rep = None, (1 << 30), None
+
+    def try_order(order):                            # all gaps at one net order; return lay if OK
+        nonlocal best, best_score, best_rep
+        for g in gaps:
+            lay = _compile_at(graph, g, order)
+            rep = verify(graph, lay)
+            if rep.ok:
+                return lay
+            score = sum(not c.ok for c in rep.checks)
+            if score < best_score:
+                best, best_score, best_rep = lay, score, rep
+        return None
+
+    lay = try_order(None)                            # default order (the fast path for easy graphs)
+    if lay is not None:
+        return lay
+    # co-route: only worth it if a fluid lane is what's still unconnected (ordering can't move belts)
+    if any(("fluid" in c.name or "connects at a real" in c.name) and not c.ok
+           for c in (best_rep.checks if best_rep else [])):
+        for order in _fluid_order_candidates(graph):
+            lay = try_order(order)
+            if lay is not None:
+                return lay
     return best
 
 
-def _compile_at(graph: Graph, vgap: int) -> Layout:
-    """One deterministic compile at a fixed fluid vertical gap (see compile_graph)."""
+def _compile_at(graph: Graph, vgap: int, fluid_order=None) -> Layout:
+    """One deterministic compile at a fixed fluid vertical gap (see compile_graph). ``fluid_order``
+    optionally forces the order fluid networks are routed in (the co-router searches over it)."""
     col = _layers(graph)
     cr, order = _assign_rows(graph, col, vgap)
     fluid_sinks = {e.dst for e in graph.edges if e.fluid}
@@ -825,7 +880,7 @@ def _compile_at(graph: Graph, vgap: int) -> Layout:
             occ.add(start)                             # leave lane unrouted (verifier reports it)
 
     occ -= fluid_corridor            # release the kept-clear fluid approaches for the pipe router
-    _emit_fluids(graph, layout, bodies, occ)
+    _emit_fluids(graph, layout, bodies, occ, fluid_order)
     return layout
 
 
@@ -969,7 +1024,7 @@ def _waypoints(path):
     return wp
 
 
-def _emit_fluids(graph, layout, bodies, occ):
+def _emit_fluids(graph, layout, bodies, occ, fluid_order=None):
     """Place pipe networks for fluid lanes. One network per fluid SOURCE: its output box is
     attached, then each consumer's input box is attached and linked into the network with a
     mostly-UNDERGROUND pipe run (tunnels straight under the belt field, saving space)."""
@@ -1053,7 +1108,10 @@ def _emit_fluids(graph, layout, bodies, occ):
     placed_surface: dict[str, set] = {}                       # src -> its surface pipe tiles
     seed: dict[str, tuple] = {}                               # src -> source box tile (net seed)
     cons_boxes: dict[str, list] = {}                          # src -> [(box, mdir) | None]
-    order = [n for n in graph.nodes if n in by_src]            # deterministic
+    order = [n for n in graph.nodes if n in by_src]            # deterministic default
+    if fluid_order is not None:                                # co-router: force a net routing order
+        order = ([n for n in fluid_order if n in by_src]
+                 + [n for n in order if n not in set(fluid_order)])
 
     # PHASE 1: place a plain pipe on EVERY fluid box (source + consumers) before routing any link,
     # so the isolation in phase 2 sees all box pipes and links never weld a foreign box (the MIX
