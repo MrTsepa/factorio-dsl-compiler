@@ -1,0 +1,21 @@
+# Mixed hub N=6: hub takes a fluid (water) AND fans an item belt to 6 consumers.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+input iron : iron-plate
+input cu : copper-plate
+fluid water : water
+assembler cable : copper-cable
+chemical hub : electronic-circuit
+assembler c0 : advanced-circuit
+assembler c1 : advanced-circuit
+assembler c2 : advanced-circuit
+assembler c3 : advanced-circuit
+assembler c4 : advanced-circuit
+assembler c5 : advanced-circuit
+output out
+cu -> cable
+iron -> hub
+cable -> hub
+water ~> hub
+hub -> c0, c1, c2, c3, c4, c5
+c0, c1, c2, c3, c4, c5 -> out

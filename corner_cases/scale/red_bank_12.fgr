@@ -1,0 +1,33 @@
+# Advanced-circuit bank N=12: THREE feed belts (cable+green+plastic) into each.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+input cu : copper-plate
+input iron : iron-plate
+fluid petroleum : petroleum-gas
+input coal : coal
+assembler cable : copper-cable
+assembler green : electronic-circuit
+chemical plastic : plastic-bar
+assembler r0 : advanced-circuit
+assembler r1 : advanced-circuit
+assembler r2 : advanced-circuit
+assembler r3 : advanced-circuit
+assembler r4 : advanced-circuit
+assembler r5 : advanced-circuit
+assembler r6 : advanced-circuit
+assembler r7 : advanced-circuit
+assembler r8 : advanced-circuit
+assembler r9 : advanced-circuit
+assembler r10 : advanced-circuit
+assembler r11 : advanced-circuit
+output out
+cu -> cable
+cu -> green
+iron -> green
+cable -> green
+petroleum ~> plastic
+coal -> plastic
+cable -> r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11
+green -> r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11
+plastic -> r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11
+r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11 -> out

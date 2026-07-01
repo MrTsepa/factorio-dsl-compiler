@@ -1,0 +1,28 @@
+# Long fluid run: a depth-8 item chain pushes the water consumer far east; pipe must reach across.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+fluid water : water
+input iron : iron-plate
+assembler s0 : iron-gear-wheel
+assembler s1 : iron-gear-wheel
+assembler s2 : iron-gear-wheel
+assembler s3 : iron-gear-wheel
+assembler s4 : iron-gear-wheel
+assembler s5 : iron-gear-wheel
+assembler s6 : iron-gear-wheel
+assembler s7 : iron-gear-wheel
+chemical acid : sulfuric-acid
+input sulfur : sulfur
+output out
+iron -> s0
+s0 -> s1
+s1 -> s2
+s2 -> s3
+s3 -> s4
+s4 -> s5
+s5 -> s6
+s6 -> s7
+water ~> acid
+sulfur -> acid
+s7 -> acid
+acid -> out

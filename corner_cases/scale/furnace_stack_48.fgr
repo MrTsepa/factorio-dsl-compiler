@@ -1,0 +1,55 @@
+# Furnace stack N=48: 1 ore belt -> 48 furnaces -> 1 plate merge belt.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+input ore : iron-ore
+furnace f0 : iron-plate
+furnace f1 : iron-plate
+furnace f2 : iron-plate
+furnace f3 : iron-plate
+furnace f4 : iron-plate
+furnace f5 : iron-plate
+furnace f6 : iron-plate
+furnace f7 : iron-plate
+furnace f8 : iron-plate
+furnace f9 : iron-plate
+furnace f10 : iron-plate
+furnace f11 : iron-plate
+furnace f12 : iron-plate
+furnace f13 : iron-plate
+furnace f14 : iron-plate
+furnace f15 : iron-plate
+furnace f16 : iron-plate
+furnace f17 : iron-plate
+furnace f18 : iron-plate
+furnace f19 : iron-plate
+furnace f20 : iron-plate
+furnace f21 : iron-plate
+furnace f22 : iron-plate
+furnace f23 : iron-plate
+furnace f24 : iron-plate
+furnace f25 : iron-plate
+furnace f26 : iron-plate
+furnace f27 : iron-plate
+furnace f28 : iron-plate
+furnace f29 : iron-plate
+furnace f30 : iron-plate
+furnace f31 : iron-plate
+furnace f32 : iron-plate
+furnace f33 : iron-plate
+furnace f34 : iron-plate
+furnace f35 : iron-plate
+furnace f36 : iron-plate
+furnace f37 : iron-plate
+furnace f38 : iron-plate
+furnace f39 : iron-plate
+furnace f40 : iron-plate
+furnace f41 : iron-plate
+furnace f42 : iron-plate
+furnace f43 : iron-plate
+furnace f44 : iron-plate
+furnace f45 : iron-plate
+furnace f46 : iron-plate
+furnace f47 : iron-plate
+output plate
+ore -> f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18, f19, f20, f21, f22, f23, f24, f25, f26, f27, f28, f29, f30, f31, f32, f33, f34, f35, f36, f37, f38, f39, f40, f41, f42, f43, f44, f45, f46, f47
+f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18, f19, f20, f21, f22, f23, f24, f25, f26, f27, f28, f29, f30, f31, f32, f33, f34, f35, f36, f37, f38, f39, f40, f41, f42, f43, f44, f45, f46, f47 -> plate

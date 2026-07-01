@@ -1,0 +1,17 @@
+# Wide merge N=12: 12 input chests merge directly onto ONE collector belt to output.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+input in0 : iron-plate
+input in1 : iron-plate
+input in2 : iron-plate
+input in3 : iron-plate
+input in4 : iron-plate
+input in5 : iron-plate
+input in6 : iron-plate
+input in7 : iron-plate
+input in8 : iron-plate
+input in9 : iron-plate
+input in10 : iron-plate
+input in11 : iron-plate
+output out
+in0, in1, in2, in3, in4, in5, in6, in7, in8, in9, in10, in11 -> out

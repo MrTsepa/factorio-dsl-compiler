@@ -1,0 +1,15 @@
+# High fan-in N=6 into a single 3x3 assembler, then to output.
+# STATUS (engine 6ed9b79): FAIL -> every declared belt lane physically connects
+
+input iron : iron-plate
+assembler p0 : copper-cable
+assembler p1 : copper-cable
+assembler p2 : copper-cable
+assembler p3 : copper-cable
+assembler p4 : copper-cable
+assembler p5 : copper-cable
+assembler sink : advanced-circuit
+output out
+iron -> p0, p1, p2, p3, p4, p5
+p0, p1, p2, p3, p4, p5 -> sink
+sink -> out

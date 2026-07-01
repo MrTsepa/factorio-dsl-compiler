@@ -1,0 +1,15 @@
+# Gear bank N=8: 1 iron belt -> 8 gear assemblers -> 1 merge belt.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+input iron : iron-plate
+assembler g0 : iron-gear-wheel
+assembler g1 : iron-gear-wheel
+assembler g2 : iron-gear-wheel
+assembler g3 : iron-gear-wheel
+assembler g4 : iron-gear-wheel
+assembler g5 : iron-gear-wheel
+assembler g6 : iron-gear-wheel
+assembler g7 : iron-gear-wheel
+output out
+iron -> g0, g1, g2, g3, g4, g5, g6, g7
+g0, g1, g2, g3, g4, g5, g6, g7 -> out

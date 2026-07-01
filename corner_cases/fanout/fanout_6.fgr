@@ -1,0 +1,13 @@
+# Pure fan-out N=6: one assembler taps ONE belt to 6 output chests.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+input iron : iron-plate
+assembler head : iron-gear-wheel
+output o0
+output o1
+output o2
+output o3
+output o4
+output o5
+iron -> head
+head -> o0, o1, o2, o3, o4, o5

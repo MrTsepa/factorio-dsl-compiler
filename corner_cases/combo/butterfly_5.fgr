@@ -1,0 +1,22 @@
+# Butterfly N=5: 5 producers each fan to all 5 consumers (25 lanes) -> out.
+# STATUS (engine 6ed9b79): FAIL -> every declared belt lane physically connects
+
+input iron : iron-plate
+assembler p0 : copper-cable
+assembler p1 : copper-cable
+assembler p2 : copper-cable
+assembler p3 : copper-cable
+assembler p4 : copper-cable
+assembler c0 : electronic-circuit
+assembler c1 : electronic-circuit
+assembler c2 : electronic-circuit
+assembler c3 : electronic-circuit
+assembler c4 : electronic-circuit
+output out
+iron -> p0, p1, p2, p3, p4
+p0 -> c0, c1, c2, c3, c4
+p1 -> c0, c1, c2, c3, c4
+p2 -> c0, c1, c2, c3, c4
+p3 -> c0, c1, c2, c3, c4
+p4 -> c0, c1, c2, c3, c4
+c0, c1, c2, c3, c4 -> out

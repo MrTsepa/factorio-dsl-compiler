@@ -1,0 +1,35 @@
+# Green-circuit bank N=24: TWO feed belts (iron+cable) into each of 24 assemblers.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+input iron : iron-plate
+input cu : copper-plate
+assembler cable : copper-cable
+assembler gc0 : electronic-circuit
+assembler gc1 : electronic-circuit
+assembler gc2 : electronic-circuit
+assembler gc3 : electronic-circuit
+assembler gc4 : electronic-circuit
+assembler gc5 : electronic-circuit
+assembler gc6 : electronic-circuit
+assembler gc7 : electronic-circuit
+assembler gc8 : electronic-circuit
+assembler gc9 : electronic-circuit
+assembler gc10 : electronic-circuit
+assembler gc11 : electronic-circuit
+assembler gc12 : electronic-circuit
+assembler gc13 : electronic-circuit
+assembler gc14 : electronic-circuit
+assembler gc15 : electronic-circuit
+assembler gc16 : electronic-circuit
+assembler gc17 : electronic-circuit
+assembler gc18 : electronic-circuit
+assembler gc19 : electronic-circuit
+assembler gc20 : electronic-circuit
+assembler gc21 : electronic-circuit
+assembler gc22 : electronic-circuit
+assembler gc23 : electronic-circuit
+output out
+cu -> cable
+iron -> gc0, gc1, gc2, gc3, gc4, gc5, gc6, gc7, gc8, gc9, gc10, gc11, gc12, gc13, gc14, gc15, gc16, gc17, gc18, gc19, gc20, gc21, gc22, gc23
+cable -> gc0, gc1, gc2, gc3, gc4, gc5, gc6, gc7, gc8, gc9, gc10, gc11, gc12, gc13, gc14, gc15, gc16, gc17, gc18, gc19, gc20, gc21, gc22, gc23
+gc0, gc1, gc2, gc3, gc4, gc5, gc6, gc7, gc8, gc9, gc10, gc11, gc12, gc13, gc14, gc15, gc16, gc17, gc18, gc19, gc20, gc21, gc22, gc23 -> out

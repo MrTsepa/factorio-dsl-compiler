@@ -1,0 +1,22 @@
+# 3 independent fluid nets (each src->mid->tank) packed side by side; must stay isolated (no mix).
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+fluid src0 : water
+chemical mid0 : sulfuric-acid
+output tank0
+fluid src1 : water
+chemical mid1 : sulfuric-acid
+output tank1
+fluid src2 : water
+chemical mid2 : sulfuric-acid
+output tank2
+input iron : iron-plate
+input sulfur : sulfur
+src0 ~> mid0
+mid0 ~> tank0
+src1 ~> mid1
+mid1 ~> tank1
+src2 ~> mid2
+mid2 ~> tank2
+iron -> mid0, mid1, mid2
+sulfur -> mid0, mid1, mid2

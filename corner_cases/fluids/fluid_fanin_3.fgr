@@ -1,0 +1,16 @@
+# Fluid fan-in N=3: 3 same-fluid (acid) producers all pipe to ONE tank (weld risk).
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+fluid water : water
+chemical q0 : sulfuric-acid
+chemical q1 : sulfuric-acid
+chemical q2 : sulfuric-acid
+input iron : iron-plate
+input sulfur : sulfur
+output tank
+water ~> q0, q1, q2
+iron -> q0, q1, q2
+sulfur -> q0, q1, q2
+q0 ~> tank
+q1 ~> tank
+q2 ~> tank
