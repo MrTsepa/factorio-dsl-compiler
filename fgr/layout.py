@@ -564,7 +564,9 @@ def _compile_at(graph: Graph, vgap: int, fluid_order=None) -> Layout:
     optionally forces the order fluid networks are routed in (the co-router searches over it)."""
     col = _layers(graph)
     cr, order = _assign_rows(graph, col, vgap)
-    fluid_sinks = {e.dst for e in graph.edges if e.fluid}
+    fluid_sinks = {e.dst for e in graph.edges if e.fluid}     # fluid consumers (need an input box)
+    fluid_srcs = {e.src for e in graph.edges if e.fluid}      # fluid producers (need an output box)
+    fluid_nodes = fluid_srcs | fluid_sinks                    # any node touching a fluid lane
     item_edges = [e for e in graph.edges if not e.fluid]
     cmax = max(col.values()) if col else 0
 
@@ -623,8 +625,6 @@ def _compile_at(graph: Graph, vgap: int, fluid_order=None) -> Layout:
 
     # reserve fluid-box external tiles of fluid-active bodies so item inserters avoid them
     # (a stray belt/inserter on a box would weld or block a fluid network).
-    fluid_nodes = ({e.src for e in graph.edges if e.fluid}
-                   | {e.dst for e in graph.edges if e.fluid})
     for name, b in bodies.items():
         if b.proto in (CHEMICAL, FLUID_SOURCE, TANK) or name in fluid_nodes:
             for tile, _flow in _fluid_connections(b.proto, b.x, b.y, b.direction):
@@ -636,13 +636,11 @@ def _compile_at(graph: Graph, vgap: int, fluid_order=None) -> Layout:
     # that actually carries fluid, so the item routers treat it as occupied -- belts go AROUND or
     # dive UNDER it (the polyline router tunnels under occupied tiles), leaving the box reachable
     # by pipes. Released again just before fluids route. (Now safe: feeds/direct reroute robustly.)
-    fluid_in = {e.dst for e in graph.edges if e.fluid}
-    fluid_out = {e.src for e in graph.edges if e.fluid}
     fluid_corridor: set[tuple[int, int]] = set()
     for name, b in bodies.items():
         for tile, flow, mdir in _fluid_connections(b.proto, b.x, b.y, b.direction, with_dir=True):
-            if not ((flow in ("input", "both") and name in fluid_in)
-                    or (flow in ("output", "both") and name in fluid_out)):
+            if not ((flow in ("input", "both") and name in fluid_sinks)
+                    or (flow in ("output", "both") and name in fluid_srcs)):
                 continue
             dx, dy = DIR_DELTA[OPPOSITE[mdir]]            # away from the machine = approach side
             for k in range(1, 6):
