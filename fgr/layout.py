@@ -1028,9 +1028,35 @@ def _emit_fluids(graph, layout, bodies, occ, fluid_order=None):
     fluid_edges = [e for e in graph.edges if e.fluid]
     if not fluid_edges:
         return
-    by_src: dict[str, list] = {}
+
+    def _tag(n):                                     # the fluid a node OUTPUTS (its recipe / item)
+        nd = graph.nodes[n]
+        return nd.item or nd.recipe or n
+
+    # NETWORKS = per-fluid connected components. Each edge unions its producer's OUT port with its
+    # consumer's IN port, keyed by (machine, output-fluid-tag, role). Same-fluid producers feeding a
+    # shared consumer thus MERGE into one network attaching ONE box, instead of demanding a box per
+    # source (which overran box counts: 6 same-acid plants into a 4-box tank, two lubricant plants
+    # into a 2-box plant). The IN/OUT role keeps a machine's own input and output boxes distinct, so
+    # merging never chains one machine's consumed fluid into its produced fluid (a spurious lane).
+    parent: dict = {}
+
+    def _find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
     for e in fluid_edges:
-        by_src.setdefault(e.src, []).append(e.dst)
+        t = _tag(e.src)
+        parent[_find((e.src, t, "o"))] = _find((e.dst, t, "i"))
+    net_ports: dict = {}                             # net_id (str) -> {(machine, tag, role): is_out}
+    for e in fluid_edges:
+        t = _tag(e.src)
+        nid = "#".join(map(str, _find((e.src, t, "o"))))
+        pd = net_ports.setdefault(nid, {})
+        pd[(e.src, t, "o")] = True                   # producer -> output box
+        pd.setdefault((e.dst, t, "i"), False)        # consumer -> input box
     box_used = {n: set() for n in bodies}
     box_pipe_net: dict[tuple[int, int], str] = {}             # placed box-pipe tile -> its net
 
@@ -1102,38 +1128,36 @@ def _emit_fluids(graph, layout, bodies, occ, fluid_order=None):
         occ.discard(t)
         return True
 
-    placed_surface: dict[str, set] = {}                       # src -> its surface pipe tiles
-    seed: dict[str, tuple] = {}                               # src -> source box tile (net seed)
-    cons_boxes: dict[str, list] = {}                          # src -> [(box, mdir) | None]
-    order = [n for n in graph.nodes if n in by_src]            # deterministic default
-    if fluid_order is not None:                                # co-router: force a net routing order
-        order = ([n for n in fluid_order if n in by_src]
-                 + [n for n in order if n not in set(fluid_order)])
+    placed_surface: dict[str, set] = {}                       # net -> its surface pipe tiles
+    seed: dict[str, tuple] = {}                               # net -> seed box tile
+    cons_boxes: dict[str, list] = {}                          # net -> [(box, mdir)] to link
+    gpos = {n: i for i, n in enumerate(graph.nodes)}
+    net_order = sorted(net_ports, key=lambda nid: min(        # by earliest producer, deterministic
+        gpos[m] for (m, _t, _r), o in net_ports[nid].items() if o))
+    if fluid_order is not None:                               # co-router: prioritise by producer order
+        fpos = {name: i for i, name in enumerate(fluid_order)}
+        net_order.sort(key=lambda nid: min(
+            (fpos.get(m, len(fpos)) for (m, _t, _r), o in net_ports[nid].items() if o), default=len(fpos)))
 
-    # PHASE 1: place a plain pipe on EVERY fluid box (source + consumers) before routing any link,
-    # so the isolation in phase 2 sees all box pipes and links never weld a foreign box (the MIX
-    # bug). A plain pipe on a box connects to its machine 4-adjacently.
-    for src in order:
-        sb = pick_box(src, "output", src)
-        if sb is None:
+    # PHASE 1: place a plain pipe on EVERY box of EVERY network (producer output + consumer input)
+    # before routing any link, so phase-2 isolation sees all box pipes and never welds a foreign box
+    # (the MIX bug). A plain pipe on a box connects to its machine 4-adjacently.
+    for nid in net_order:
+        boxes = []
+        for (m, _t, _r), is_out in sorted(net_ports[nid].items(), key=lambda kv: (not kv[1], kv[0])):
+            box = pick_box(m, "output" if is_out else "input", nid)
+            if box is None:
+                continue
+            occ.discard(box[0])
+            layout.add(PlacedEntity(PIPE, box[0][0], box[0][1], meta={"role": "pipe", "net": nid}))
+            occ.add(box[0])
+            box_pipe_net[box[0]] = nid
+            boxes.append(box)
+        if not boxes:
             continue
-        occ.discard(sb[0])
-        layout.add(PlacedEntity(PIPE, sb[0][0], sb[0][1], meta={"role": "pipe", "net": src}))
-        occ.add(sb[0])
-        box_pipe_net[sb[0]] = src
-        seed[src] = sb[0]
-        cbs, surf = [], {sb[0]}
-        for d in by_src[src]:
-            db = pick_box(d, "input", src)
-            cbs.append(db)
-            if db is not None:
-                occ.discard(db[0])
-                layout.add(PlacedEntity(PIPE, db[0][0], db[0][1], meta={"role": "pipe", "net": src}))
-                occ.add(db[0])
-                box_pipe_net[db[0]] = src
-                surf.add(db[0])
-        cons_boxes[src] = cbs
-        placed_surface[src] = surf
+        seed[nid] = boxes[0][0]                                # seed at the first producer box
+        cons_boxes[nid] = boxes[1:]
+        placed_surface[nid] = {b[0] for b in boxes}
 
     def _lay_interior(path, cross):
         """Lay path[1:-1] (endpoints already pipes); True if it connects both ends. When routed
@@ -1209,25 +1233,25 @@ def _emit_fluids(graph, layout, bodies, occ, fluid_order=None):
     # PHASE 2: link each consumer box into its network, kept >=1 tile from every OTHER network's
     # pipes so fluids never weld. Step onto the box, else tunnel into it; if BOTH fail (the box is
     # walled in by belts) retry allowing the run to DIVE under straight belt runs (belt-dive).
-    for src in order:
-        if src not in seed:
+    for nid in net_order:
+        if nid not in seed:
             continue
-        cur_src = src
+        cur_src = nid
         avoid = {(t[0] + dx, t[1] + dy)
-                 for o, tiles in placed_surface.items() if o != src
+                 for o, tiles in placed_surface.items() if o != nid
                  for t in tiles for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))}
         avoid -= occ
         occ |= avoid
         before = len(layout.entities)
-        net = {seed[src]}
-        # link NEAREST consumer boxes first: short links stay compact and don't sprawl the net
-        # across the field, leaving room for the farther ones (greedy, but measurably better).
-        for cb in sorted((c for c in cons_boxes[src] if c is not None),
-                         key=lambda c: abs(c[0][0] - seed[src][0]) + abs(c[0][1] - seed[src][1])):
+        net = {seed[nid]}
+        # link NEAREST boxes first: short links stay compact and don't sprawl the net across the
+        # field, leaving room for the farther ones (greedy, but measurably better).
+        for cb in sorted(cons_boxes[nid],
+                         key=lambda c: abs(c[0][0] - seed[nid][0]) + abs(c[0][1] - seed[nid][1])):
             db, mdir = cb
             if not _link(net, db, mdir, cross=None):          # normal first (working cases unchanged)
                 _link(net, db, mdir, cross=crossable)          # then belt-dive fallback
-        placed_surface[src] |= {(e.x, e.y) for e in layout.entities[before:]
+        placed_surface[nid] |= {(e.x, e.y) for e in layout.entities[before:]
                                 if e.proto in (PIPE, PIPE_TO_GROUND)}
         occ -= avoid
 
