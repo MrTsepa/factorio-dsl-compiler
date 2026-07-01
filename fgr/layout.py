@@ -650,8 +650,12 @@ def compile_graph(graph: Graph) -> Layout:
         xs = [vx_riser[(p, e.dst)] for e in consumers_of[p]] + [vx_feed[p]]
         x0, x1 = min(xs), max(xs)
         le = max(consumers_of[p], key=lambda e: vx_riser[(p, e.dst)])
-        # turn UP into the last consumer's riser (but NOT into a collector sink -- it taps normally)
-        if vx_riser[(p, le.dst)] == x1 and le.dst not in collector_dst:
+        # turn UP into the last consumer's riser (a clean, tap-less tail) -- but NOT into a collector
+        # sink, nor into a CONGESTED consumer (in-deg >= 3): there the crowded approach tends to box
+        # the riser's start into a pocket it can only tunnel out of, creating a ug that won't accept
+        # the trunk's feed (a broken lane). Congested consumers tap normally instead.
+        if (vx_riser[(p, le.dst)] == x1 and le.dst not in collector_dst
+                and in_count.get(le.dst, 0) <= 2):
             occ.discard((x1, Rp[p] - 1))               # the up-turn belt takes the tap tile
             if _lay_polyline(layout, occ, [(x0, Rp[p]), (x1, Rp[p]), (x1, Rp[p] - 1)],
                              {"role": "trunk", "src": p}) is not None:
