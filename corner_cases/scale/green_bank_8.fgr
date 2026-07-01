@@ -1,0 +1,19 @@
+# Green-circuit bank N=8: TWO feed belts (iron+cable) into each of 8 assemblers.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+input iron : iron-plate
+input cu : copper-plate
+assembler cable : copper-cable
+assembler gc0 : electronic-circuit
+assembler gc1 : electronic-circuit
+assembler gc2 : electronic-circuit
+assembler gc3 : electronic-circuit
+assembler gc4 : electronic-circuit
+assembler gc5 : electronic-circuit
+assembler gc6 : electronic-circuit
+assembler gc7 : electronic-circuit
+output out
+cu -> cable
+iron -> gc0, gc1, gc2, gc3, gc4, gc5, gc6, gc7
+cable -> gc0, gc1, gc2, gc3, gc4, gc5, gc6, gc7
+gc0, gc1, gc2, gc3, gc4, gc5, gc6, gc7 -> out

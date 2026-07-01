@@ -1,0 +1,25 @@
+# Two hubs each fan out to the SAME 12 consumers (cross reconverge).
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+input iron : iron-plate
+input cu : copper-plate
+assembler ha : iron-gear-wheel
+assembler hb : copper-cable
+assembler a0 : electronic-circuit
+assembler a1 : electronic-circuit
+assembler a2 : electronic-circuit
+assembler a3 : electronic-circuit
+assembler a4 : electronic-circuit
+assembler a5 : electronic-circuit
+assembler b0 : electronic-circuit
+assembler b1 : electronic-circuit
+assembler b2 : electronic-circuit
+assembler b3 : electronic-circuit
+assembler b4 : electronic-circuit
+assembler b5 : electronic-circuit
+output out
+iron -> ha
+cu -> hb
+ha -> a0, a1, a2, a3, a4, a5, b0, b1, b2, b3, b4, b5
+hb -> a0, a1, a2, a3, a4, a5, b0, b1, b2, b3, b4, b5
+a0, a1, a2, a3, a4, a5, b0, b1, b2, b3, b4, b5 -> out

@@ -1,0 +1,15 @@
+# Acid row N=4: water pipe + 2 item belts (iron,sulfur) contend for 4 plants' approach.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+fluid water : water
+input iron : iron-plate
+input sulfur : sulfur
+chemical a0 : sulfuric-acid
+chemical a1 : sulfuric-acid
+chemical a2 : sulfuric-acid
+chemical a3 : sulfuric-acid
+output acid_out
+water ~> a0, a1, a2, a3
+iron -> a0, a1, a2, a3
+sulfur -> a0, a1, a2, a3
+a0, a1, a2, a3 -> acid_out

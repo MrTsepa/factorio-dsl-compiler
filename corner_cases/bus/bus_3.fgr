@@ -1,0 +1,19 @@
+# Wide bus: iron+cable belts tapped by 3 greens and 3 gears, two merges (row-spacing stress).
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+input iron : iron-plate
+input cu : copper-plate
+assembler cable : copper-cable
+assembler g0 : electronic-circuit
+assembler g1 : electronic-circuit
+assembler g2 : electronic-circuit
+assembler k0 : iron-gear-wheel
+assembler k1 : iron-gear-wheel
+assembler k2 : iron-gear-wheel
+output circ_out
+output gear_out
+cu -> cable
+iron -> g0, g1, g2, k0, k1, k2
+cable -> g0, g1, g2
+g0, g1, g2 -> circ_out
+k0, k1, k2 -> gear_out

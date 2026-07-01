@@ -1,0 +1,15 @@
+# Hub fan-out N=4: one green-circuit belt tapped by 4 downstream 3x3 assemblers.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+input iron : iron-plate
+input cu : copper-plate
+assembler green : electronic-circuit
+assembler c0 : advanced-circuit
+assembler c1 : advanced-circuit
+assembler c2 : advanced-circuit
+assembler c3 : advanced-circuit
+output out
+cu -> green
+iron -> green
+green -> c0, c1, c2, c3
+c0, c1, c2, c3 -> out

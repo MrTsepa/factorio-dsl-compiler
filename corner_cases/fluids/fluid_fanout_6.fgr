@@ -1,0 +1,15 @@
+# Fluid fan-out N=6: one petroleum source piped to 6 plastic plants + 1 coal belt.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+fluid petroleum : petroleum-gas
+input coal : coal
+chemical p0 : plastic-bar
+chemical p1 : plastic-bar
+chemical p2 : plastic-bar
+chemical p3 : plastic-bar
+chemical p4 : plastic-bar
+chemical p5 : plastic-bar
+output out
+petroleum ~> p0, p1, p2, p3, p4, p5
+coal -> p0, p1, p2, p3, p4, p5
+p0, p1, p2, p3, p4, p5 -> out

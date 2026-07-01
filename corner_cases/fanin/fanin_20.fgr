@@ -1,0 +1,27 @@
+# High fan-in N=20: 20 producers merge onto ONE collector belt into a 1x1 output.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+input iron : iron-plate
+assembler p0 : iron-gear-wheel
+assembler p1 : iron-gear-wheel
+assembler p2 : iron-gear-wheel
+assembler p3 : iron-gear-wheel
+assembler p4 : iron-gear-wheel
+assembler p5 : iron-gear-wheel
+assembler p6 : iron-gear-wheel
+assembler p7 : iron-gear-wheel
+assembler p8 : iron-gear-wheel
+assembler p9 : iron-gear-wheel
+assembler p10 : iron-gear-wheel
+assembler p11 : iron-gear-wheel
+assembler p12 : iron-gear-wheel
+assembler p13 : iron-gear-wheel
+assembler p14 : iron-gear-wheel
+assembler p15 : iron-gear-wheel
+assembler p16 : iron-gear-wheel
+assembler p17 : iron-gear-wheel
+assembler p18 : iron-gear-wheel
+assembler p19 : iron-gear-wheel
+output out
+iron -> p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, p17, p18, p19
+p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, p17, p18, p19 -> out

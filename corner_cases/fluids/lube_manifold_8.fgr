@@ -1,0 +1,22 @@
+# Lube manifold N=8: PURE fluid, heavy-oil -> 8 lube plants -> tank (fluid-vs-fluid pack + same-fluid weld).
+# STATUS (engine 6ed9b79): FAIL -> every fluid lane connects at a real fluid-box (pipe network)
+
+fluid heavy : heavy-oil
+chemical lube0 : lubricant
+chemical lube1 : lubricant
+chemical lube2 : lubricant
+chemical lube3 : lubricant
+chemical lube4 : lubricant
+chemical lube5 : lubricant
+chemical lube6 : lubricant
+chemical lube7 : lubricant
+output lube_tank
+heavy ~> lube0, lube1, lube2, lube3, lube4, lube5, lube6, lube7
+lube0 ~> lube_tank
+lube1 ~> lube_tank
+lube2 ~> lube_tank
+lube3 ~> lube_tank
+lube4 ~> lube_tank
+lube5 ~> lube_tank
+lube6 ~> lube_tank
+lube7 ~> lube_tank

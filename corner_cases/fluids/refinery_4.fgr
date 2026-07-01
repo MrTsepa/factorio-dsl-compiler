@@ -1,0 +1,23 @@
+# Refinery N=4: same-fluid producers packed, each fanning by pipe to 2 fluid consumers (weld+reach).
+# STATUS (engine 6ed9b79): FAIL -> every fluid lane connects at a real fluid-box (pipe network)
+
+fluid crude : crude-oil
+fluid water : water
+input coal : coal
+chemical ref0 : lubricant
+chemical ref1 : lubricant
+chemical ref2 : lubricant
+chemical ref3 : lubricant
+chemical crackL : light-oil-cracking
+chemical plastic : plastic-bar
+output lube_tank
+output plastic_out
+crude ~> ref0, ref1, ref2, ref3
+water ~> ref0, ref1, ref2, ref3, crackL
+ref0 ~> crackL, plastic
+ref1 ~> crackL, plastic
+ref2 ~> crackL, plastic
+ref3 ~> crackL, plastic
+coal -> plastic
+crackL ~> lube_tank
+plastic -> plastic_out

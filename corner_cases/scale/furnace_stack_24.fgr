@@ -1,0 +1,31 @@
+# Furnace stack N=24: 1 ore belt -> 24 furnaces -> 1 plate merge belt.
+# STATUS (engine 6ed9b79): PASS (verifies)
+
+input ore : iron-ore
+furnace f0 : iron-plate
+furnace f1 : iron-plate
+furnace f2 : iron-plate
+furnace f3 : iron-plate
+furnace f4 : iron-plate
+furnace f5 : iron-plate
+furnace f6 : iron-plate
+furnace f7 : iron-plate
+furnace f8 : iron-plate
+furnace f9 : iron-plate
+furnace f10 : iron-plate
+furnace f11 : iron-plate
+furnace f12 : iron-plate
+furnace f13 : iron-plate
+furnace f14 : iron-plate
+furnace f15 : iron-plate
+furnace f16 : iron-plate
+furnace f17 : iron-plate
+furnace f18 : iron-plate
+furnace f19 : iron-plate
+furnace f20 : iron-plate
+furnace f21 : iron-plate
+furnace f22 : iron-plate
+furnace f23 : iron-plate
+output plate
+ore -> f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18, f19, f20, f21, f22, f23
+f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18, f19, f20, f21, f22, f23 -> plate

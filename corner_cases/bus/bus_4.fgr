@@ -1,0 +1,21 @@
+# Wide bus: iron+cable belts tapped by 4 greens and 4 gears, two merges (row-spacing stress).
+# STATUS (engine 6ed9b79): FAIL -> every declared belt lane physically connects
+
+input iron : iron-plate
+input cu : copper-plate
+assembler cable : copper-cable
+assembler g0 : electronic-circuit
+assembler g1 : electronic-circuit
+assembler g2 : electronic-circuit
+assembler g3 : electronic-circuit
+assembler k0 : iron-gear-wheel
+assembler k1 : iron-gear-wheel
+assembler k2 : iron-gear-wheel
+assembler k3 : iron-gear-wheel
+output circ_out
+output gear_out
+cu -> cable
+iron -> g0, g1, g2, g3, k0, k1, k2, k3
+cable -> g0, g1, g2, g3
+g0, g1, g2, g3 -> circ_out
+k0, k1, k2, k3 -> gear_out
