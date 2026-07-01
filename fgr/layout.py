@@ -235,10 +235,11 @@ def _primary_pred(graph: Graph, n: str, col: dict[str, int]):
     return min(preds, key=lambda p: (col[n] - col[p], list(graph.nodes).index(p)))
 
 
-def _assign_rows(graph, col):
+def _assign_rows(graph, col, vgap=FLUID_VGAP):
     """Center row per node: align each node to its primary predecessor's row when free,
     else nearest free slot in its column. Returns {name: center_row}. Bodies of height 3
-    occupy center-1..center+1; height-1 occupy [center]."""
+    occupy center-1..center+1; height-1 occupy [center]. ``vgap`` = extra rows between two
+    stacked FLUID machines (raised adaptively when a network can't route at the base gap)."""
     order = _order(graph, col)
     cols = {}
     for n in graph.nodes:
@@ -268,8 +269,8 @@ def _assign_rows(graph, col):
         used: list[tuple[int, int, bool]] = []     # (lo, hi, is_fluid) center-spans this column
         def free(center, hh, pd, fl):
             lo, hi = center - hh - pd, center + hh + pd
-            return all(hi < a - (FLUID_VGAP if (fl and afl) else 0)
-                       or lo > b + (FLUID_VGAP if (fl and afl) else 0) for a, b, afl in used)
+            return all(hi < a - (vgap if (fl and afl) else 0)
+                       or lo > b + (vgap if (fl and afl) else 0) for a, b, afl in used)
         for n in cols[c]:
             hh, pd, fl = half(n), pad(n), n in fluid_ep_nodes
             pp = _primary_pred(graph, n, col)
@@ -407,10 +408,31 @@ def _output_drop(body):
 # ---------------------------------------------------------------------------
 # Pass 4 + orchestration.
 # ---------------------------------------------------------------------------
-def compile_graph(graph: Graph) -> Layout:
-    """Generate a candidate :class:`Layout` (the v2 reference generator)."""
+def compile_graph(graph: Graph, vgap: int | None = None) -> Layout:
+    """Generate a candidate :class:`Layout` (the v2 reference generator). ADAPTIVE by default:
+    compile at the base fluid gap and, only if the result doesn't fully verify, retry with more
+    vertical clearance between stacked fluid machines (dense pipe fields route far better with
+    room) -- returning the first layout that verifies, else the one with the fewest failures. So
+    graphs that route tight stay compact; only boxed-in ones spread. Pass ``vgap`` to force a gap."""
+    if vgap is not None:
+        return _compile_at(graph, vgap)
+    from .verify import verify                       # lazy: verify imports layout at module load
+    best, best_score = None, (1 << 30)
+    for g in (FLUID_VGAP, 6, 10, 14):
+        lay = _compile_at(graph, g)
+        rep = verify(graph, lay)
+        if rep.ok:
+            return lay
+        score = sum(not c.ok for c in rep.checks)    # fewer failing checks = better
+        if score < best_score:
+            best, best_score = lay, score
+    return best
+
+
+def _compile_at(graph: Graph, vgap: int) -> Layout:
+    """One deterministic compile at a fixed fluid vertical gap (see compile_graph)."""
     col = _layers(graph)
-    cr, order = _assign_rows(graph, col)
+    cr, order = _assign_rows(graph, col, vgap)
     fluid_sinks = {e.dst for e in graph.edges if e.fluid}
     item_edges = [e for e in graph.edges if not e.fluid]
     cmax = max(col.values()) if col else 0
