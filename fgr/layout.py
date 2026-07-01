@@ -1175,3 +1175,75 @@ def _emit_fluids(graph, layout, bodies, occ):
         placed_surface[src] |= {(e.x, e.y) for e in layout.entities[before:]
                                 if e.proto in (PIPE, PIPE_TO_GROUND)}
         occ -= avoid
+
+    _consolidate_pipes(layout, occ, {t for b in bodies.values() for t in b.tiles()})
+
+
+def _consolidate_pipes(layout, occ, machine_tiles):
+    """Strictly-positive cleanup: replace each straight run of plain pipes with a single p2g tunnel
+    (``p2g . . . . p2g`` instead of ``p p p p p p``). A tunnel is connectivity-equivalent to the
+    run it replaces but BURIES the middle -- freeing those surface tiles (crossable) and cutting the
+    entity count. Only genuine straight interiors are touched: a pipe is eligible only if its two
+    net-neighbours are opposite (in-line) and it is NOT a box pipe (adjacent to a fluid machine, so
+    it must stay plain to feed it) -- so junctions, turns, and machine attachments are never broken."""
+    from collections import defaultdict
+    net_all: dict = defaultdict(set)                 # net -> all pipe/p2g tiles
+    net_pipe: dict = defaultdict(dict)               # net -> {tile: plain-pipe entity}
+    for e in layout.entities:
+        n = e.meta.get("net")
+        if not n:
+            continue
+        if e.proto in (PIPE, PIPE_TO_GROUND):
+            net_all[n].add((e.x, e.y))
+        if e.proto == PIPE:
+            net_pipe[n][(e.x, e.y)] = e
+
+    def box_pipe(t):                                 # touches a fluid machine -> must stay plain
+        return any((t[0] + dx, t[1] + dy) in machine_tiles
+                   for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+
+    freed: set = set()
+    for net, pipes in net_pipe.items():
+        allt = net_all[net]
+
+        def sdir(t):                                 # (dx,dy) if t is a straight in-line interior
+            ns = [(t[0] + dx, t[1] + dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+                  if (t[0] + dx, t[1] + dy) in allt]
+            if len(ns) != 2 or box_pipe(t):
+                return None
+            (ax, ay), (bx, by) = ns
+            if ax == bx == t[0] and ay != by:
+                return (0, 1)
+            if ay == by == t[1] and ax != bx:
+                return (1, 0)
+            return None
+
+        straight = {t: d for t in pipes if (d := sdir(t))}
+        seen: set = set()
+        for t0 in sorted(straight):
+            if t0 in seen:
+                continue
+            dx, dy = straight[t0]
+            s = t0                                   # rewind to the run's start
+            while (b := (s[0] - dx, s[1] - dy)) in straight and straight[b] == (dx, dy):
+                s = b
+            run = []                                 # collect the maximal straight run
+            t = s
+            while t in straight and straight[t] == (dx, dy) and t not in seen:
+                run.append(t)
+                seen.add(t)
+                t = (t[0] + dx, t[1] + dy)
+            fwd = delta_to_dir(dx, dy)
+            for i in range(0, len(run), PIPE_UG_GAP + 1):   # tunnel in reach-bounded chunks
+                seg = run[i:i + PIPE_UG_GAP + 1]
+                if len(seg) < 3:                     # need >=3 to bury >=1 middle tile
+                    continue
+                pipes[seg[0]].proto = PIPE_TO_GROUND
+                pipes[seg[0]].direction = OPPOSITE[fwd]      # entrance mouth faces back
+                pipes[seg[-1]].proto = PIPE_TO_GROUND
+                pipes[seg[-1]].direction = fwd               # exit mouth faces forward
+                freed.update(seg[1:-1])
+
+    if freed:
+        layout.entities = [e for e in layout.entities if (e.x, e.y) not in freed]
+        occ -= freed
