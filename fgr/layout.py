@@ -742,6 +742,10 @@ def compile_graph(graph: Graph) -> Layout:
     # 3) risers: tap the producer trunk, then route up to a consumer input port. Try the
     # candidate ports (west bottom-first, then south/north/east) and use the FIRST whose
     # riser lays cleanly -- so a riser never has to cross a direct belt right at its corner.
+    trunk_tiles: dict[str, set] = {}
+    for ent in layout.entities:
+        if ent.meta.get("role") == "trunk":
+            trunk_tiles.setdefault(ent.meta["src"], set()).add((ent.x, ent.y))
     for e in ch_edges:
         p, c = e.src, e.dst
         if (p, c) in collector_edges:
@@ -750,6 +754,20 @@ def compile_graph(graph: Graph) -> Layout:
         tap, start = (rx, Rp[p] - 1), (rx, Rp[p] - 2)
         inline = inline_last.get(p) == (p, c)          # trunk already turned up -> no tap inserter
         occ.discard(start)                             # free our reserved start for the riser
+        # DIRECT TRUNK TAP: if the producer's trunk already runs at a consumer port (it passes under
+        # the sink's N/S face), one inserter there taps it straight in -- no riser belt needed.
+        if not inline:
+            direct = next(((i, d) for a, i, d in _input_slots(bodies[c])
+                           if a in trunk_tiles.get(p, ()) and i not in occ and i not in used_ins[c]),
+                          None)
+            if direct is not None:
+                i, d = direct
+                layout.add(PlacedEntity(INSERTER, i[0], i[1], direction=d,
+                                        meta={"role": "in", "edge": (p, c)}))
+                occ.add(i)
+                occ.add(start)                         # riser start unused -> keep it reserved
+                used_ins[c].add(i)
+                continue
         cand = [(a, i, d) for a, i, d in _input_slots(bodies[c])
                 if i not in occ and i not in used_ins[c] and a not in occ]
         reserved = {i for _, i, _ in cand}             # keep risers off the inserter tiles
