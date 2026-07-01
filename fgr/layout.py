@@ -65,6 +65,8 @@ FLUID_BOX = {
 
 UG_MAX_GAP = 5     # underground-belt max entrance->exit distance
 PIPE_UG_GAP = 10   # pipe-to-ground reach (vanilla 2.0)
+FLUID_VGAP = 3     # extra rows reserved between two stacked FLUID machines: their boxes jut past
+#                    the body, and the extra room de-congests fluid routing (a swept sweet spot)
 
 # substation geometry (FBSR dump, vanilla 2.0): 2x2, supply 18x18, wire reach 18
 SUBSTATION_SUPPLY = 9    # Chebyshev half-extent of the supply area from the body
@@ -256,24 +258,30 @@ def _assign_rows(graph, col):
     def pad(n):                                     # extra clearance for crowded consumers:
         return max(1, (indeg.get(n, 0) + 1) // 2)   # ~1 row of slack per 2 converging inputs
 
+    # reserve FLUID_VGAP extra rows between two FLUID machines (pairwise): their boxes jut past the
+    # body, and the extra room de-congests the pipe router (which routes far better with space).
+    fluid_ep_nodes = ({e.src for e in graph.edges if e.fluid}
+                      | {e.dst for e in graph.edges if e.fluid})
+
     cr: dict[str, int] = {}
     for c in sorted(cols):
-        used: list[tuple[int, int]] = []           # occupied [lo,hi] center-spans this column
-        def free(center, hh, pd):
+        used: list[tuple[int, int, bool]] = []     # (lo, hi, is_fluid) center-spans this column
+        def free(center, hh, pd, fl):
             lo, hi = center - hh - pd, center + hh + pd
-            return all(hi < a or lo > b for a, b in used)
+            return all(hi < a - (FLUID_VGAP if (fl and afl) else 0)
+                       or lo > b + (FLUID_VGAP if (fl and afl) else 0) for a, b, afl in used)
         for n in cols[c]:
-            hh, pd = half(n), pad(n)
+            hh, pd, fl = half(n), pad(n), n in fluid_ep_nodes
             pp = _primary_pred(graph, n, col)
             want = cr[pp] if pp in cr else 0
             r = want
             for off in range(0, 400):              # search outward from desired row
-                if free(want + off, hh, pd):
+                if free(want + off, hh, pd, fl):
                     r = want + off; break
-                if free(want - off, hh, pd):
+                if free(want - off, hh, pd, fl):
                     r = want - off; break
             cr[n] = r
-            used.append((r - hh - pd, r + hh + pd))
+            used.append((r - hh - pd, r + hh + pd, fl))
     return cr, order
 
 

@@ -16,7 +16,7 @@ COMPLEX = Path(__file__).resolve().parents[1] / "examples" / "complex"
 CURATED = sorted((COMPLEX.parent / "basic").glob("*.fgr")) + sorted(COMPLEX.glob("*.fgr"))
 
 
-_V2_TAIL = {"flying_robot_frame"}   # not yet fully routed
+_V2_TAIL = set()   # all hand-authored complex factories now fully route
 
 
 @pytest.mark.parametrize("path", sorted(COMPLEX.glob("*.fgr")), ids=lambda p: p.stem)
