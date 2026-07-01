@@ -475,6 +475,90 @@ def compile_graph(graph: Graph, vgap: int | None = None) -> Layout:
     return best
 
 
+def _gutter_layout(cmax, col, producers, ch_edges):
+    """Column x-positions with adaptive gutter widths: each gutter is sized by how many vertical
+    channel lines (one feed per producer, one riser per channel edge) cross it, so wide/
+    reconvergent graphs get the room they need. Returns (gutter: col -> width, Xcol: col -> left x)."""
+    nvert = {g: 0 for g in range(cmax + 1)}
+    for p in producers:
+        nvert[col[p]] += 1                                       # feed east of producer
+    for e in ch_edges:
+        if col[e.dst] - 1 >= 0:
+            nvert[col[e.dst] - 1] += 1                           # riser west of consumer
+    gutter = {g: max(6, nvert[g] + 5) for g in range(cmax + 1)}
+    Xcol = {0: 0}
+    for c in range(1, cmax + 1):
+        Xcol[c] = Xcol[c - 1] + 3 + gutter[c - 1]
+    return gutter, Xcol
+
+
+def _assign_vlanes(cmax, Xcol, gutter, producers, ch_edges, col, cr, out_drop, bodies, layout):
+    """Assign each feed and riser a distinct vertical column (vx) in its gutter, PLANAR so they
+    never cross in the band (only trunks get crossed -> clean dives). Feeds take the WEST of the
+    gutter, risers the EAST; within each block the topmost lane gets the outermost column so its
+    long jog clears the shorter lanes below (see docs/V2_DESIGN.md). Avoids columns already holding
+    inserters and the west-face access columns of channel consumers. Returns (vx_feed, vx_riser)."""
+    def gutter_of(x):
+        for g in range(cmax):
+            if Xcol[g] + 3 <= x <= Xcol[g + 1] - 1:
+                return g
+        return None
+
+    blocked: dict[int, set] = {g: set() for g in range(cmax + 1)}
+    for e in layout.entities:
+        if e.proto in (INSERTER, LONG_INSERTER):
+            g = gutter_of(e.x)
+            if g is not None:
+                blocked[g].add(e.x)
+    for c in {e.dst for e in ch_edges}:                # west access cols of channel consumers
+        b = bodies[c]
+        for x in (b.x - 1, b.x - 2, b.x - 3):
+            g = gutter_of(x)
+            if g is not None:
+                blocked[g].add(x)
+
+    vx_feed: dict[str, int] = {}
+    vx_riser: dict[tuple[str, str], int] = {}
+    for g in range(cmax + 1):
+        feeds = sorted((p for p in producers if col[p] == g), key=lambda p: out_drop[p][1])
+        risers = sorted((e for e in ch_edges if col[e.dst] - 1 == g), key=lambda e: cr[e.dst])
+        hi = Xcol[g + 1] if g < cmax else Xcol[g] + 3 + gutter[g]
+        avail = [x for x in range(Xcol[g] + 3, hi - 1) if x not in blocked[g]]
+        if len(avail) < len(feeds) + len(risers):
+            raise LayoutError(f"gutter {g} too narrow for {len(feeds) + len(risers)} lanes")
+        west, east = avail[:len(feeds)], avail[len(feeds):len(feeds) + len(risers)]
+        for i, p in enumerate(feeds):                  # topmost producer -> eastmost of west block
+            vx_feed[p] = west[len(west) - 1 - i]
+        for i, e in enumerate(risers):                 # topmost consumer -> westmost of east block
+            vx_riser[(e.src, e.dst)] = east[i]
+    return vx_feed, vx_riser
+
+
+def _color_channel_rows(producers, consumers_of, vx_riser, vx_feed, band_bot):
+    """Assign each producer's trunk a channel row below the band. A trunk's x-span is [min..max] of
+    its feed + riser columns; trunks whose spans don't overlap SHARE a row (greedy interval-graph
+    colouring), so the channel is 3 * chromatic-number rows tall instead of 3 per producer -- a big
+    shrink for wide/reconvergent graphs. Returns (Rp: producer -> trunk row, row_end: rightmost x
+    occupied per allocated row)."""
+    span = {}
+    for p in producers:
+        xs = [vx_riser[(p, e.dst)] for e in consumers_of[p]] + [vx_feed[p]]
+        span[p] = (min(xs), max(xs))
+    Rp: dict[str, int] = {}
+    row_end: list[int] = []
+    for p in sorted(producers, key=lambda n: span[n][0]):
+        lo, hi = span[p]
+        for k in range(len(row_end)):
+            if row_end[k] < lo - 1:                     # free row (1-tile gap) -> reuse
+                Rp[p] = band_bot + 2 + 3 * k
+                row_end[k] = hi
+                break
+        else:
+            Rp[p] = band_bot + 2 + 3 * len(row_end)
+            row_end.append(hi)
+    return Rp, row_end
+
+
 def _compile_at(graph: Graph, vgap: int, fluid_order=None) -> Layout:
     """One deterministic compile at a fixed fluid vertical gap (see compile_graph). ``fluid_order``
     optionally forces the order fluid networks are routed in (the co-router searches over it)."""
@@ -513,20 +597,10 @@ def _compile_at(graph: Graph, vgap: int, fluid_order=None) -> Layout:
     direct_set = {(e.src, e.dst) for e in item_edges if _is_direct(e)}
     ch_edges = [e for e in item_edges if (e.src, e.dst) not in direct_set]
 
-    # adaptive gutter widths from the number of CHANNEL vertical lines crossing each gutter
+    # column x-positions with gutters sized to the channel lines crossing them
     _prod_set = {e.src for e in ch_edges}
     producers = [n for n in graph.nodes if n in _prod_set]   # deterministic node order
-    nvert = {g: 0 for g in range(cmax + 1)}
-    for p in producers:
-        nvert[col[p]] = nvert.get(col[p], 0) + 1                  # feed east of producer
-    for e in ch_edges:
-        g = col[e.dst] - 1
-        if g >= 0:
-            nvert[g] = nvert.get(g, 0) + 1                        # riser west of consumer
-    gutter = {g: max(6, nvert.get(g, 0) + 5) for g in range(cmax + 1)}
-    Xcol = {0: 0}
-    for c in range(1, cmax + 1):
-        Xcol[c] = Xcol[c - 1] + 3 + gutter[c - 1]
+    gutter, Xcol = _gutter_layout(cmax, col, producers, ch_edges)
 
     # place bodies LEFT-aligned in uniform 3-wide cells -> west face is at Xcol[c]-1/-2
     # for every body (1x1 or 3x3), so input geometry is uniform.
@@ -629,73 +703,15 @@ def _compile_at(graph: Graph, vgap: int, fluid_order=None) -> Layout:
         else:
             raise LayoutError(f"no free output port on {p!r}")
 
-    # assign a DISTINCT vertical column (vx) in each gutter to every feed and riser. Avoid
-    # columns holding inserters and the west-face access columns of channel consumers
-    # (inserter + anchor + buffer) -- the actual input port is chosen later, riser-aware.
-    blocked_cols: dict[int, set] = {g: set() for g in range(cmax + 1)}
-
-    def gutter_of(x):
-        for g in range(cmax):
-            if Xcol[g] + 3 <= x <= Xcol[g + 1] - 1:
-                return g
-        return None
-    for e in layout.entities:
-        if e.proto in (INSERTER, LONG_INSERTER):
-            g = gutter_of(e.x)
-            if g is not None:
-                blocked_cols[g].add(e.x)
-    for c in {e.dst for e in ch_edges}:                # west access cols of channel consumers
-        b = bodies[c]
-        for x in (b.x - 1, b.x - 2, b.x - 3):
-            g = gutter_of(x)
-            if g is not None:
-                blocked_cols[g].add(x)
-
-    # PLANAR vertical-lane assignment so feeds/risers never cross each other in the band
-    # (only channel trunks get crossed -> clean dives). Feeds occupy the WEST of the
-    # gutter, risers the EAST. Feeds: topmost producer -> eastmost (its long jog clears
-    # lower, shorter verticals). Risers: topmost consumer -> westmost (its long approach
-    # clears lower verticals that don't reach its row). See docs/V2_DESIGN.md.
-    vx_feed: dict[str, int] = {}
-    vx_riser: dict[tuple[str, str], int] = {}
-    for g in range(cmax + 1):
-        feeds = sorted((p for p in producers if col[p] == g), key=lambda p: out_drop[p][1])
-        risers = sorted((e for e in ch_edges if col[e.dst] - 1 == g),
-                        key=lambda e: cr[e.dst])
-        hi = (Xcol[g + 1] if g < cmax else Xcol[g] + 3 + gutter[g])
-        avail = [x for x in range(Xcol[g] + 3, hi - 1) if x not in blocked_cols[g]]
-        if len(avail) < len(feeds) + len(risers):
-            raise LayoutError(f"gutter {g} too narrow for {len(feeds) + len(risers)} lanes")
-        west = avail[:len(feeds)]
-        east = avail[len(feeds):len(feeds) + len(risers)]
-        for i, p in enumerate(feeds):                  # top producer -> eastmost of west block
-            vx_feed[p] = west[len(west) - 1 - i]
-        for i, e in enumerate(risers):                 # top consumer -> westmost of east block
-            vx_riser[(e.src, e.dst)] = east[i]
+    vx_feed, vx_riser = _assign_vlanes(cmax, Xcol, gutter, producers, ch_edges,
+                                       col, cr, out_drop, bodies, layout)
 
     consumers_of: dict[str, list] = {}
     for e in ch_edges:
         consumers_of.setdefault(e.src, []).append(e)
 
-    # CHANNEL-ROW COLORING: a trunk spans [min..max] of its feed+riser columns. Trunks
-    # whose x-spans don't overlap SHARE a channel row -> the channel collapses from 3 rows
-    # per producer to 3 * (chromatic number), hugely shrinking wide/reconvergent layouts.
-    span = {}
-    for p in producers:
-        xs = [vx_riser[(p, e.dst)] for e in consumers_of[p]] + [vx_feed[p]]
-        span[p] = (min(xs), max(xs))
-    Rp: dict[str, int] = {}
-    row_end: list[int] = []                            # rightmost x occupied in each row
-    for p in sorted(producers, key=lambda n: span[n][0]):
-        lo, hi = span[p]
-        for k in range(len(row_end)):
-            if row_end[k] < lo - 1:                    # free row (1-tile gap) -> reuse
-                Rp[p] = band_bot + 2 + 3 * k
-                row_end[k] = hi
-                break
-        else:
-            Rp[p] = band_bot + 2 + 3 * len(row_end)
-            row_end.append(hi)
+    # channel rows: producers with disjoint trunk x-spans share a row (interval-graph colouring).
+    Rp, row_end = _color_channel_rows(producers, consumers_of, vx_riser, vx_feed, band_bot)
 
     # reserve every riser's tap + start tile up front so risers/feeds don't clobber each
     # other's connection corridor (two lanes into the same node would otherwise collide).
@@ -705,12 +721,14 @@ def _compile_at(graph: Graph, vgap: int, fluid_order=None) -> Layout:
         occ.add((rx, Rp[e.src] - 2))
 
     # --- emit, diving discipline by phase order: trunks, feeds, risers ---
-    # 1) trunks (one horizontal lane per producer). The terminal TURNS UP into its last consumer's
-    # riser -- a plain belt corner that feeds the machine directly, so that consumer needs NO tap
-    # inserter (the cleanest shape). We also keep the tile BELOW the terminal reserved, so the
-    # occupancy is byte-identical to the south-turn variant -> all downstream routing is unchanged
-    # (zero regression). If the up-turn can't lay, fall back to a SOUTH turn (tapped) into an empty
-    # reserved tile -- never a protruding dead-end stub.
+    # 1) trunks (one east-flowing belt lane per producer). The terminal MUST turn off the east axis:
+    # a bare east-flowing end spills into the next gutter and registers as a merged/undeclared belt
+    # lane (load-bearing, NOT cosmetic -- a plain [x0..x1] trunk fails ~half the battery). Preferred
+    # turn is UP into the last consumer's riser -- a belt corner feeding the machine directly, so that
+    # consumer needs NO tap inserter (cleanest; the tile below stays reserved so occupancy matches the
+    # south-turn variant). Skip the up-turn for a collector sink or a CONGESTED consumer (in-deg >= 3),
+    # where the crowded approach boxes the riser start into a pocket it can only tunnel out of (a
+    # broken feed); those take the SOUTH turn (tapped), whose dead-end stub belt is then dropped.
     inline_last: dict[str, tuple] = {}
     for p in producers:
         xs = [vx_riser[(p, e.dst)] for e in consumers_of[p]] + [vx_feed[p]]
