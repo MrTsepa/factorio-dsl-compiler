@@ -178,3 +178,40 @@ def test_same_lane_mixing_fails():
     bad = [c for c in report.checks if "mixing on a belt lane" in c.name][0]
     assert not bad.ok, "two products sharing one belt lane must be flagged"
     assert "copper-plate" in bad.detail and "iron-plate" in bad.detail
+
+
+def test_sideload_into_underground_entrance_mixes():
+    """Underground ends are side-loadable in-game (the belt half of the tile accepts
+    side input) -- a belt dead-ending against a foreign tunnel entrance DOES feed it.
+    Two products meeting that way on one lane must be flagged."""
+    from fgr.ir import NORTH, SOUTH, WEST
+    from fgr.layout import CHEST_INPUT, CHEST_OUTPUT, Layout, PlacedEntity, UNDERGROUND
+
+    g = parse("\n".join([
+        "input stone : stone",
+        "input steel : steel-plate",
+        "output out",
+        "",
+        "stone -> out",
+        "steel -> out",
+    ]))
+    lay = Layout()
+    lay.add(PlacedEntity(CHEST_INPUT, 0, 0, item="stone", meta={"node": "stone"}))
+    lay.add(PlacedEntity(CHEST_INPUT, 3, 5, item="steel-plate", meta={"node": "steel"}))
+    lay.add(PlacedEntity(CHEST_OUTPUT, 9, 0, meta={"node": "out"}))
+    # stone: chest -> belt -> tunnel -> belt -> out
+    lay.add(PlacedEntity(INSERTER, 1, 0, direction=WEST, meta={}))
+    lay.add(PlacedEntity(BELT, 2, 0, direction=EAST, meta={}))
+    lay.add(PlacedEntity(UNDERGROUND, 3, 0, direction=EAST, ug_type="input", meta={}))
+    lay.add(PlacedEntity(UNDERGROUND, 6, 0, direction=EAST, ug_type="output", meta={}))
+    lay.add(PlacedEntity(BELT, 7, 0, direction=EAST, meta={}))
+    lay.add(PlacedEntity(INSERTER, 8, 0, direction=WEST, meta={}))
+    # steel: belt column dead-ending against the tunnel ENTRANCE's south side
+    lay.add(PlacedEntity(INSERTER, 3, 4, direction=SOUTH, meta={}))
+    lay.add(PlacedEntity(BELT, 3, 3, direction=NORTH, meta={}))
+    lay.add(PlacedEntity(BELT, 3, 2, direction=NORTH, meta={}))
+    lay.add(PlacedEntity(BELT, 3, 1, direction=NORTH, meta={}))
+    report = verify(g, lay)
+    bad = [c for c in report.checks if "mixing on a belt lane" in c.name][0]
+    assert not bad.ok, "side-load into a tunnel entrance must count as a real feed"
+    assert "steel-plate" in bad.detail and "stone" in bad.detail

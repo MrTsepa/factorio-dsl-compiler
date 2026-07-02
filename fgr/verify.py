@@ -180,7 +180,13 @@ def _flow_edges(layout: Layout, carrier_at: dict, trans_at: dict, bodies: dict, 
         if e.proto == SPLITTER:
             return d == td                     # splitters take only an aligned back feed
         if e.proto == UNDERGROUND:
-            return e.ug_type == "input" and d == td  # only an entrance, fed from behind
+            # underground ends are SIDE-LOADABLE like belts (the false-pass a render
+            # audit caught: a belt dead-ending against an entrance's side does feed it
+            # in-game). An entrance also takes its normal back feed; an exit's back is
+            # the tunnel and its front is outgoing flow, so an exit takes sides only.
+            if e.ug_type == "input":
+                return td != OPPOSITE[d]
+            return d not in (td, OPPOSITE[td])
         return False
 
     def push(src_id, target_tile, d) -> None:
@@ -324,7 +330,9 @@ def _check_lane_mixing(graph: Graph, layout: Layout, trans_at, bodies, report: R
             td = te.direction or 0
             ok = ((te.proto == BELT and td != OPPOSITE[d])
                   or (te.proto == SPLITTER and d == td)
-                  or (te.proto == UNDERGROUND and te.ug_type == "input" and d == td))
+                  or (te.proto == UNDERGROUND
+                      and (td != OPPOSITE[d] if te.ug_type == "input"
+                           else d not in (td, OPPOSITE[td]))))
             if ok:
                 pushes.append((e, c, ft, d))
                 if te.proto == BELT:
@@ -342,14 +350,26 @@ def _check_lane_mixing(graph: Graph, layout: Layout, trans_at, bodies, report: R
 
     for e, c, ft, d in pushes:
         te = trans_at[ft]
+        td = te.direction or 0
         src, dst = lane_id(e, c), lane_id(te, ft)
-        if te.proto == BELT and (te.direction or 0) != d and not curved(ft):
+        o = (c[0] - ft[0], c[1] - ft[1])
+        if te.proto == UNDERGROUND and td != d:
+            # side-load onto an underground END: the tile is half belt, half hood
+            # ("the half with a belt can accept input from the side; the other half
+            # blocks incoming items" -- wiki). The feeder's two lanes arrive at two
+            # positions ALONG the receiver's axis, so only the lane over the belt
+            # half enters: the rear-side lane for an entrance (hood in front), the
+            # front-side lane for an exit (hood behind). It lands on the near lane.
+            dl = "L" if o == left(td) else "R"
+            pass_dir = OPPOSITE[td] if te.ug_type == "input" else td
+            sl = "L" if left(d) == DIR_DELTA[pass_dir] else "R"
+            link(src, sl, dst, dl)
+        elif te.proto == BELT and td != d and not curved(ft):
             # side-load: both feeder lanes land on the receiver's near-side lane
-            o = (c[0] - ft[0], c[1] - ft[1])
-            dl = "L" if o == left(te.direction or 0) else "R"
+            dl = "L" if o == left(td) else "R"
             link(src, "L", dst, dl)
             link(src, "R", dst, dl)
-        else:                                      # straight, curve, splitter, ug entrance
+        else:                                      # straight, curve, splitter, ug back-feed
             link(src, "L", dst, "L")
             link(src, "R", dst, "R")
     for e in layout.entities:                      # tunnel: entrance lanes -> paired exit

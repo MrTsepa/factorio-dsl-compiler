@@ -322,7 +322,9 @@ class _Ctx:
 # Weld legality against the committed state (mirrors verify.py's accepts()).
 # ---------------------------------------------------------------------------
 def _accepting(state: _State, net, t, flow_dir):
-    """Does a FOREIGN transport carrier at t accept an item flowing `flow_dir`?"""
+    """Does a FOREIGN transport carrier at t accept an item flowing `flow_dir`?
+    Mirrors verify.py: underground ends are SIDE-LOADABLE like belts (their belt
+    half takes side input), so a belt dead-ending against one welds in-game."""
     c = state.carrier.get(t)
     if c is None or c[0] == net:
         return False
@@ -330,7 +332,9 @@ def _accepting(state: _State, net, t, flow_dir):
     if proto == BELT:
         return d != OPPOSITE[flow_dir]
     if proto == UNDERGROUND:
-        return ug == "input" and d == flow_dir
+        if ug == "input":
+            return d != OPPOSITE[flow_dir]
+        return flow_dir not in (d, OPPOSITE[d])
     return False
 
 
@@ -436,6 +440,12 @@ def _dijkstra(ctx: _Ctx, state: _State, net_id, kind, sources, targets, tree_til
                 continue                          # can't convert a committed pipe in place
             ax = _axis(e)
             jc = cost + JUMP_END + Lp(ax, tile)
+            if kind == "belt":
+                # the entrance's belt half takes side-loads: a foreign feed into this
+                # tile would weld into the tunnel (soft; negotiation clears it)
+                for _n, m in _foreign_pushers(state, net_id, tile):
+                    if m != OPPOSITE[e]:
+                        jc += pres
             if (lfam, ax, tile[0], tile[1]) in own_l:
                 continue                          # own same-axis line here -> mispairing
             for m in range(1, max_gap):
@@ -449,6 +459,10 @@ def _dijkstra(ctx: _Ctx, state: _State, net_id, kind, sources, targets, tree_til
                         or (lfam, ax, land[0], land[1]) in own_l):
                     continue
                 lc = jc + SURF + Sp(land) + Lp(ax, land)
+                if kind == "belt":
+                    for _n, m in _foreign_pushers(state, net_id, land):
+                        if m not in (e, OPPOSITE[e]):
+                            lc += pres            # side-load into my exit -> weld
                 heapq.heappush(heap, (lc + h(land), lc, seq, land, e, "jump",
                                       (key, "jump", e)))
                 seq += 1
@@ -704,7 +718,7 @@ def _route_belt_net(ctx: _Ctx, state: _State, net: _BeltNet, pres):
         # retry with the offender hard-blocked -- rare, bounded, deterministic.
         retry_block: set = set()
         res = None
-        for _attempt in range(4):
+        for _attempt in range(8):
             res = _dijkstra(ctx, state, net.net, "belt", sources, targets,
                             own_block | retry_block, plan.lclaims, pres)
             if res is None:
@@ -970,7 +984,7 @@ def _route_fluid_net(ctx: _Ctx, state: _State, net: _FluidNet, pres):
         # is harmless, but a jump would convert it to a p2g and sever its other links.
         retry_block: set = set(tree)
         res = None
-        for _attempt in range(4):
+        for _attempt in range(8):
             res = _dijkstra(ctx, state, net.net, "pipe", sources, targets, retry_block,
                             plan.lclaims, pres, allow_boxes=frozenset(allow),
                             forbid_land=frozenset(allow))
@@ -1027,23 +1041,27 @@ def _audit(ctx: _Ctx, state: _State):
         if plan.kind == "belt":
             sanctioned = {(h, H) for h, H, _mt, _c in plan.merges}
             for t, op in plan.ops.items():
-                if op[0] not in ("belt", "ug_out"):
+                if op[0] not in ("belt", "ug_in", "ug_out"):
                     continue
                 d = op[1]
-                front = (t[0] + DIR_DELTA[d][0], t[1] + DIR_DELTA[d][1])
-                if front in plan.ops:
-                    continue
-                c = state.carrier.get(front)
-                if c is not None and c[0] != nid and _accepting(state, nid, front, d):
-                    if (c[0], front) in sanctioned:
-                        continue
-                    weld_nets.update((nid, c[0]))
-                    weld_tiles.add(front)
-                if op[0] == "belt":
-                    for n2, m in _foreign_pushers(state, nid, t):
-                        if d != OPPOSITE[m] and (n2, nid, t) not in sanctioned_push:
-                            weld_nets.update((nid, n2))
-                            weld_tiles.add(t)
+                if op[0] != "ug_in":               # entrances push underground, not ahead
+                    front = (t[0] + DIR_DELTA[d][0], t[1] + DIR_DELTA[d][1])
+                    c = state.carrier.get(front)
+                    if (front not in plan.ops and c is not None and c[0] != nid
+                            and _accepting(state, nid, front, d)
+                            and (c[0], front) not in sanctioned):
+                        weld_nets.update((nid, c[0]))
+                        weld_tiles.add(front)
+                # incoming foreign feeds this tile would take: belts and BOTH
+                # underground ends accept side-loads in-game (belt-half of the tile)
+                for n2, m in _foreign_pushers(state, nid, t):
+                    if op[0] == "ug_out":
+                        takes = m not in (d, OPPOSITE[d])
+                    else:                          # belt / ug_in: back + sides
+                        takes = d != OPPOSITE[m]
+                    if takes and (n2, nid, t) not in sanctioned_push:
+                        weld_nets.update((nid, n2))
+                        weld_tiles.add(t)
         else:
             for t, op in plan.ops.items():
                 if op[0] == "pipe":
@@ -1121,6 +1139,21 @@ def _negotiate(ctx: _Ctx, belt_nets, fluid_nets):
         for r in overused:
             dirty |= state.res.get(r, set())
         dirty |= weld_nets | orphans | unrouted
+        # an unrouted terminal alone leaves nothing else dirty -- the field never
+        # changes and the net stays stuck. Charge history around the failed
+        # consumer's faces and rip whoever holds that approach ring.
+        for nid in unrouted:
+            plan = state.plans[nid]
+            for consumer in plan.unrouted:
+                body = ctx.bodies.get(consumer)
+                if body is None:
+                    continue
+                for f, outward in _faces(body):
+                    pick = (f[0] + DIR_DELTA[outward][0], f[1] + DIR_DELTA[outward][1])
+                    for t in (f, pick):
+                        r = ("S", t[0], t[1])
+                        state.hist[r] = state.hist.get(r, 0) + HIST_INC
+                        dirty |= state.res.get(r, set())
         # rip a host's clients too, TRANSITIVELY: merge webs (rings included) must
         # rip and re-form together, or each partial reroute strands one stale host
         # and the group thrashes forever.
