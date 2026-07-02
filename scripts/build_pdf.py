@@ -22,7 +22,8 @@ sys.path.insert(0, str(ROOT))
 from PIL import Image, ImageDraw, ImageFont                 # noqa: E402
 
 from fgr.dsl import DslError, parse                         # noqa: E402
-from fgr.layout import LayoutError, compile_graph           # noqa: E402
+from fgr.layout import LayoutError                          # noqa: E402
+from fgr.generators import compile_graph                    # noqa: E402
 from fgr.verify import verify                               # noqa: E402
 from fgr.blueprint import to_blueprint_string               # noqa: E402
 from fgr.render import render_blueprint_string              # noqa: E402

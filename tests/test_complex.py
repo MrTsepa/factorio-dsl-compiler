@@ -7,7 +7,8 @@ import pytest
 
 from fgr.dsl import parse
 from fgr.layout import (FLUID_SOURCE, PIPE, PIPE_TO_GROUND, PIPE_UG_GAP, UG_MAX_GAP,
-                        PlacedEntity, compile_graph)
+                        PlacedEntity)
+from fgr.generators import compile_graph
 from fgr.verify import verify
 
 COMPLEX = Path(__file__).resolve().parents[1] / "examples" / "complex"

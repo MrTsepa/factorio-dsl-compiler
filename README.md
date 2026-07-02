@@ -351,29 +351,30 @@ lanes *exactly* equals the spec — every declared lane present, no extra ones, 
 fluids sharing a pipe network.
 
 Because the verifier is generator-agnostic, the layout generator itself is **swappable** —
-two live side by side behind one interface (`fgr.generators`):
+three live side by side behind one interface (`fgr.generators`):
 
 | generator | approach | pass rate\* | avg compile\*\* | notes |
 |---|---|---|---|---|
-| **v2** (default) | deterministic **lane fabric**: 4 fixed passes, no search, no rip-up | **138 / 155** | **13 ms** | never times out; the default |
-| v1 | fixed grid + **A\* rip-up** search router | 132 / 155 | 521 ms | can hang on large/congested graphs (10/155 timeouts) |
+| **v3** (default) | v2's placement + a **global negotiated-congestion router** (PathFinder-style) | **155 / 155** | 183 ms | passes the whole battery; leanest layouts (fewest entities/turns) |
+| v2 | deterministic **lane fabric**: 4 fixed passes, no search, no rip-up | 138 / 155 | **25 ms** | fastest; tail = congested high fan-in |
+| v1 | fixed grid + **A\* rip-up** search router | 131 / 155 | 506 ms | can hang on large/congested graphs (11/155 timeouts) |
 
-<sub>\*across `examples/` (49 curated) + `corner_cases/` (106 generated stress cases).
-\*\*on the cases both fully verify — v1's cost is understated, since this excludes its 10
-outright timeouts.</sub>
+<sub>\*across `examples/` (49 curated) + `corner_cases/` (106 generated stress cases),
+each run subprocess-isolated with a 10s timeout. \*\*on each generator's own passing set.</sub>
 
 ```bash
-.venv/bin/python -m fgr compile examples/basic/gears.fgr -g v1   # pick a generator explicitly
+.venv/bin/python -m fgr compile examples/basic/gears.fgr -g v2   # pick a generator explicitly
 .venv/bin/python scripts/compare_generators.py --corner-cases    # full head-to-head, live numbers
 ```
 
-v2 is faster, more reliable, and lays straighter belts (fewer needless turns), at the cost of
-somewhat more tiles/entities on complex graphs — it trades some compactness for the placement
-robustness (fluid-machine spacing, adaptive-gap escalation) that lets it route dense fluid
-fields without welding or fragmenting. See **[STATUS.md](STATUS.md)** for the full comparative
-analysis, including a fluid-network bug both generators originally shared (v2 fixed it; v1,
-kept as the historical baseline, still has it) and v2's one remaining tracked failure bucket
-(congested belt risers on very high fan-in).
+v3 treats routing the way FPGA place-and-route does (see `docs/INSPIRATION.md`): each
+producer's fan-out is one multi-terminal net with **flexible pins** — the search chooses
+machine faces, taps its own trunk, bridges adjacent machines with a single inserter, or
+merges into another lane bound for the same consumer (collector belts *emerge* under high
+fan-in) — and all nets negotiate for tiles under growing congestion prices instead of
+claiming them greedily. That closes every tracked v1/v2 failure while producing the leanest
+layouts of the three (fewest entities, 10× fewer belt turns than v2). See
+**[STATUS.md](STATUS.md)** for the full comparative analysis.
 
 Because the oracle is only as good as its model of the game, that model is checked against
 ground truth — `fgr validate-model` asserts the inserter/fluid-box/underground geometry
@@ -389,7 +390,7 @@ examples/
   complex/           hand-authored realistic builds (furnaces, oil/chem fluids, deep chains)
   stress/            machine-generated complex DAGs — the stress battery
 corner_cases/        standalone failure-hunting corpus (106 cases; not in the gating suite)
-scripts/             compare_generators (v1 vs v2 head-to-head) · stress_complex (battery)
+scripts/             compare_generators (3-way head-to-head) · stress_complex (battery)
                      · independent_check (2nd-opinion checker) · audit_specs · build_report
                      · gen_gallery · refresh_corner_case_status
 tests/               the pytest suite
@@ -399,8 +400,9 @@ docs/                the committed report + gallery images (also served on GitHu
 | file | role |
 |------|------|
 | `fgr/dsl.py` | parse `.fgr` text → a `Graph` (the spec) |
-| `fgr/generators.py` | the registry: `compile_graph(graph, "v1"\|"v2")` — pick a generator by name |
-| `fgr/layout.py` | **v2**, the default generator: deterministic lane-fabric router |
+| `fgr/generators.py` | the registry: `compile_graph(graph, "v1"\|"v2"\|"v3")` — pick a generator by name |
+| `fgr/layout_v3.py` | **v3**, the default generator: global negotiated-congestion router |
+| `fgr/layout.py` | **v2**: deterministic lane-fabric router (also v3's placement passes) |
 | `fgr/layout_v1.py` | **v1**, the original fixed-grid + A\* rip-up router (historical baseline) |
 | `fgr/verify.py` | **the** generator-agnostic oracle |
 | `fgr/blueprint.py` + `fgr/encode.py` | `Layout` → Factorio 2.0 blueprint string |
@@ -412,15 +414,16 @@ docs/                the committed report + gallery images (also served on GitHu
 
 It works end-to-end: a high-level graph becomes a real, verified, buildable layout — items
 on belts and fluids on pipes, with undergrounds, inline-tap fan-out/merge (no splitters),
-furnaces, and chemical plants. It also demonstrates the premise itself: **two** generators
-(v1's search router, v2's deterministic lane fabric) sit behind the same interface and are
-graded by the same independent oracle — swap the generator, keep the guarantee. `STATUS.md`
-has the full comparative analysis and the current numbers for both.
+furnaces, and chemical plants. It also demonstrates the premise itself: **three** generators
+(v1's search router, v2's deterministic lane fabric, v3's global negotiated router) sit
+behind the same interface and are graded by the same independent oracle — swap the
+generator, keep the guarantee. Each generation was graded against its predecessor by that
+oracle before becoming the default. `STATUS.md` has the full comparative analysis.
 
-The honest edges: v2's four deterministic passes (layer → order → place → emit) route the
-large majority of graphs cleanly and instantly, but very high fan-in into a single machine
-(the "congested belt riser" bucket — a producer trunk ending deep in a packed channel with no
-free path to the consumer) isn't fully routed yet; tracked in `STATUS.md` with what's been
-tried. And the verifier checks *connectivity*, not throughput — that an item *can* reach B,
-not the rate. The architecture keeps the generators and the verifier cleanly separated so
-each can grow on its own — the generator is swappable; the verifier is the oracle.
+The honest edges: the tracked 155-case battery passes in full on v3, so what remains is
+structural — the verifier checks *connectivity*, not throughput (that an item *can* reach B,
+not the rate), power isn't placed yet, and v3's negotiation is bounded (a graph whose
+contention never converges would emit its best attempt for the verifier to grade; growing
+`corner_cases/` until one exists is the standing failure hunt). The architecture keeps the
+generators and the verifier cleanly separated so each can grow on its own — the generator is
+swappable; the verifier is the oracle.

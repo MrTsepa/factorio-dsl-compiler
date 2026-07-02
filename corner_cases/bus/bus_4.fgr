@@ -1,5 +1,5 @@
 # Wide bus: iron+cable belts tapped by 4 greens and 4 gears, two merges (row-spacing stress).
-# STATUS (engine e3e2314): FAIL -> every declared belt lane physically connects
+# STATUS (engine bd8a1c6): PASS (verifies)
 
 input iron : iron-plate
 input cu : copper-plate

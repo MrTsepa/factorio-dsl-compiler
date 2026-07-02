@@ -5,7 +5,8 @@ import pytest
 from fgr.dsl import DslError, parse
 from fgr.ir import NORTH, WEST
 from fgr.layout import (CHEMICAL, FLUID_SOURCE, FURNACE, PIPE, TANK,
-                        compile_graph, _fluid_connections)
+                        _fluid_connections)
+from fgr.generators import compile_graph
 from fgr.verify import verify
 
 ACID = """

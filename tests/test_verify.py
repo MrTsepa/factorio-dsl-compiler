@@ -6,7 +6,8 @@ from pathlib import Path
 from fgr.blueprint import to_blueprint_string
 from fgr.dsl import parse
 from fgr.ir import EAST
-from fgr.layout import BELT, INSERTER, compile_graph
+from fgr.generators import compile_graph
+from fgr.layout import BELT, INSERTER
 from fgr.verify import verify
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples" / "basic"
@@ -31,10 +32,15 @@ def test_examples_verify_clean():
 
 def test_missing_belt_breaks_a_lane():
     g, lay = _load("gears.fgr")
-    # drop one belt tile in the middle of the iron->gears lane
-    lay.entities = [e for e in lay.entities
-                    if not (e.proto == BELT and e.meta.get("edge") == ("iron", "gears")
-                            and e.x == 4)]
+    # drop the belt tile nearest the midpoint between the two bodies -- mid-run on the
+    # iron->gears lane whatever generator laid it (no reliance on generator meta)
+    bodies = {e.meta["node"]: e for e in lay.entities if e.meta.get("node")}
+    ax, ay = bodies["iron"].center
+    bx, by = bodies["gears"].center
+    mx, my = (ax + bx) / 2, (ay + by) / 2
+    belts = [e for e in lay.entities if e.proto == BELT]
+    victim = min(belts, key=lambda e: abs(e.x - mx) + abs(e.y - my))
+    lay.entities = [e for e in lay.entities if e is not victim]
     report = verify(g, lay)
     assert not report.ok
     assert ("iron", "gears") not in report.lanes_found

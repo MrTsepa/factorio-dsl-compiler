@@ -27,7 +27,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from fgr.dsl import DslError, parse                  # noqa: E402
-from fgr.layout import LayoutError, compile_graph    # noqa: E402
+from fgr.layout import LayoutError                   # noqa: E402
+from fgr.generators import compile_graph             # noqa: E402
 from fgr.verify import verify                        # noqa: E402
 from fgr.blueprint import to_blueprint_string        # noqa: E402
 
