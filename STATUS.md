@@ -17,7 +17,7 @@ default.**
 
 | Suite | Result |
 |-------|--------|
-| **pytest** | **119 passed, 0 xfailed** (green — the xfail tails are empty) |
+| **pytest** | **120 passed, 0 xfailed** (green — the xfail tails are empty) |
 | **examples/** (49 curated cases) that fully verify | **49 / 49** |
 | **corner_cases/** (106 generated stress cases) that fully verify | **106 / 106** |
 
@@ -57,12 +57,12 @@ comparison). Live numbers: run the script yourself.
   are real feeds in-game). v3 routes the same cases with same-product lanes,
   lane-separated pairs, and tunnel-aware weld checks instead.
 - **Shape.** v3 is the *leanest* of the three: ~5.4× fewer entities than v2 on the corpus,
-  and fewer even than v1 (which bought compactness with search). Belt turns collapse to 209
-  total vs v2's 2,044 — merges and flexible pins remove almost every needless jog. Tunnel
+  and fewer even than v1 (which bought compactness with search). Belt turns collapse to 211
+  total vs v2's 1,867 — merges and flexible pins remove almost every needless jog. Tunnel
   crossings are the lowest of the three, and belts never tunnel across open ground (a dive
   only wins when the surface is actually blocked).
-- **Speed.** v3 averages 183 ms — ~7× v2, ~3× faster than v1, worst case ~4.4 s
-  (`scale_1`), never times out. The negotiation loop is bounded (20 rounds, early stall
+- **Speed.** v3 averages 133 ms — ~5× v2, ~3.5× faster than v1, worst case under 5 s,
+  never times out. The negotiation loop is bounded (20 rounds, early stall
   cutoff) and every search is A\* over a finite field, so there is no hang mode.
 - **Determinism.** Same input → byte-identical layout (no RNG, no wall clock; verified on
   the hard cases).
