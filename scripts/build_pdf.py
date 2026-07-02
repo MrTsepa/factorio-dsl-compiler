@@ -1,10 +1,12 @@
 #!/usr/bin/env python
-"""Render EVERY example (passing AND failing) full-size via FBSR, stamp each with its
-verifier verdict + error context, and assemble one multi-page PDF for review.
+"""Render EVERY case (examples/ AND corner_cases/, passing AND failing) full-size via
+FBSR, stamp each with its verifier verdict + error context, and assemble one multi-page
+PDF for review.
 
     export FBSR_HOME=/path/to/Factorio-FBSR/FactorioBlueprintStringRenderer
-    .venv/bin/python scripts/build_pdf.py            # -> out/all_cases.pdf
-    .venv/bin/python scripts/build_pdf.py 3          # only first 3 cases (quick test)
+    .venv/bin/python scripts/build_pdf.py                  # -> out/all_cases.pdf (155 cases)
+    .venv/bin/python scripts/build_pdf.py 3                # only first 3 cases (quick test)
+    .venv/bin/python scripts/build_pdf.py --examples-only  # skip corner_cases/
 
 One page per case: a header band (name, PASS/FAIL/ERROR, every failing check with detail,
 plus the DSL spec) above the full-resolution layout render. A cover page summarises the
@@ -79,7 +81,7 @@ def _text_block(lines, font, maxw):
 
 
 def _evaluate(fp):
-    rel = fp.relative_to(ROOT / "examples").as_posix()
+    rel = fp.relative_to(ROOT).as_posix()
     text = fp.read_text()
     rec = {"rel": rel, "dsl": text, "status": "COMPILE-ERROR", "checks": [], "err": None, "img": None}
     try:
@@ -170,15 +172,14 @@ def _cover(recs):
     inner = PAGE_W - 2 * MARGIN
     by_suite = {}
     for r in recs:
-        by_suite.setdefault(r["rel"].split("/")[0], []).append(r)
+        by_suite.setdefault("/".join(r["rel"].split("/")[:-1]), []).append(r)
     npass = sum(r["status"] == "PASS" for r in recs)
     lines = [("TITLE", f"fgr — all {len(recs)} cases   ({npass}/{len(recs)} verify)"),
              ("BODY", time.strftime("generated %Y-%m-%d %H:%M")), ("BODY", "")]
-    for suite in ("basic", "complex", "stress"):
-        rs = by_suite.get(suite, [])
-        if rs:
-            p = sum(r["status"] == "PASS" for r in rs)
-            lines.append(("HEAD", f"{suite}: {p}/{len(rs)} verify"))
+    for suite in sorted(by_suite):
+        rs = by_suite[suite]
+        p = sum(r["status"] == "PASS" for r in rs)
+        lines.append(("HEAD", f"{suite}: {p}/{len(rs)} verify"))
     lines.append(("BODY", ""))
     fails = [r for r in recs if r["status"] != "PASS"]
     lines.append(("HEAD", f"Failing cases ({len(fails)}):"))
@@ -205,15 +206,18 @@ def _cover(recs):
 
 
 def main():
-    limit = int(sys.argv[1]) if len(sys.argv) > 1 else None
-    examples = sorted((ROOT / "examples").glob("*/*.fgr"))
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    limit = int(args[0]) if args else None
+    cases = sorted((ROOT / "examples").glob("*/*.fgr"))
+    if "--examples-only" not in sys.argv:
+        cases += sorted((ROOT / "corner_cases").glob("*/*.fgr"))
     if limit:
-        examples = examples[:limit]
+        cases = cases[:limit]
     recs = []
-    for i, fp in enumerate(examples, 1):
+    for i, fp in enumerate(cases, 1):
         rec = _evaluate(fp)
         recs.append(rec)
-        print(f"[{i}/{len(examples)}] {rec['rel']:32s} {rec['status']}"
+        print(f"[{i}/{len(cases)}] {rec['rel']:44s} {rec['status']}"
               + ("" if rec["img"] else "  (no image)"))
     pages = [_cover(recs)] + [_compose(r) for r in recs]
     out_pdf = OUT / "all_cases.pdf"
