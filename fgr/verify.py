@@ -115,6 +115,7 @@ def verify(graph: Graph, layout: Layout) -> Report:
     edges_out = _flow_edges(layout, carrier_at, trans_at, bodies, report)
     report.lanes_found = _direct_lanes(graph, bodies, body_tiles, edges_out)
     _compare_to_spec(graph, report)
+    _check_lane_mixing(graph, layout, trans_at, bodies, report)
     _check_fluids(graph, layout, bodies, report)
     return report
 
@@ -274,6 +275,139 @@ def _compare_to_spec(graph: Graph, report: Report) -> None:
     report.add("no undeclared belt lanes", not spurious,
                "" if not spurious else "spurious lanes: " +
                ", ".join(f"{a}->{b}" for a, b in spurious))
+
+
+def _check_lane_mixing(graph: Graph, layout: Layout, trans_at, bodies, report: Report) -> None:
+    """A transport belt has TWO lanes (sides). Side-loading keeps two products separable
+    -- one per side -- so a belt can carry at most two products; but two DIFFERENT
+    products on the SAME lane mix in-game (jams, wrong ratios, starved machines).
+
+    Track, per (tile, lane), the set of products that can reach it, using real lane
+    physics: a straight feed and a CURVE (a belt whose only feed is perpendicular)
+    preserve lanes; a side-load (perpendicular feed into a non-curved belt) drops BOTH
+    of the feeder's lanes onto the receiver's near-side lane; an underground preserves
+    lanes across the tunnel; an inserter drops on the FAR lane (both lanes,
+    conservatively, when its arm is parallel to the belt). Products are tagged by the
+    source node's item/recipe, so many producers of the SAME product may share a lane.
+    """
+    belts = {(e.x, e.y): e for e in layout.entities if e.proto == BELT}
+    if not belts:
+        return
+
+    def tag_of(name):
+        nd = graph.nodes.get(name)
+        return (nd.item or nd.recipe or name) if nd is not None else name
+
+    def left(d):
+        dx, dy = DIR_DELTA[d]
+        return (dy, -dx)                          # left of travel, y-down coordinates
+
+    def lane_id(ent, tile):
+        # splitter: one logical node (its 2 cells balance freely within a lane)
+        return (ent.x, ent.y) if ent.proto == SPLITTER else tile
+
+    # belt-connection pushes (they also define each belt's curve state)
+    feeders: dict = {}
+    pushes = []                                    # (src_ent, src_tile, dst_tile, flow_dir)
+    for e in layout.entities:
+        cells = []
+        if e.proto == BELT or (e.proto == UNDERGROUND and e.ug_type == "output"):
+            cells = [(e.x, e.y)]
+        elif e.proto == SPLITTER:
+            cells = e.tiles()
+        d = e.direction or 0
+        for c in cells:
+            ft = (c[0] + DIR_DELTA[d][0], c[1] + DIR_DELTA[d][1])
+            te = trans_at.get(ft)
+            if te is None:
+                continue
+            td = te.direction or 0
+            ok = ((te.proto == BELT and td != OPPOSITE[d])
+                  or (te.proto == SPLITTER and d == td)
+                  or (te.proto == UNDERGROUND and te.ug_type == "input" and d == td))
+            if ok:
+                pushes.append((e, c, ft, d))
+                if te.proto == BELT:
+                    feeders.setdefault(ft, []).append(d)
+
+    def curved(tile):
+        b = belts[tile]
+        fs = feeders.get(tile, [])
+        return len(fs) == 1 and fs[0] not in (b.direction or 0, OPPOSITE[b.direction or 0])
+
+    edges: dict = {}                               # (lane_node, lane) -> set of (lane_node, lane)
+
+    def link(src, sl, dst, dl):
+        edges.setdefault((src, sl), set()).add((dst, dl))
+
+    for e, c, ft, d in pushes:
+        te = trans_at[ft]
+        src, dst = lane_id(e, c), lane_id(te, ft)
+        if te.proto == BELT and (te.direction or 0) != d and not curved(ft):
+            # side-load: both feeder lanes land on the receiver's near-side lane
+            o = (c[0] - ft[0], c[1] - ft[1])
+            dl = "L" if o == left(te.direction or 0) else "R"
+            link(src, "L", dst, dl)
+            link(src, "R", dst, dl)
+        else:                                      # straight, curve, splitter, ug entrance
+            link(src, "L", dst, "L")
+            link(src, "R", dst, "R")
+    for e in layout.entities:                      # tunnel: entrance lanes -> paired exit
+        if e.proto == UNDERGROUND and e.ug_type == "input":
+            ex = _ug_exit((e.x, e.y), e.direction or 0, trans_at)
+            if ex is not None:
+                link((e.x, e.y), "L", ex, "L")
+                link((e.x, e.y), "R", ex, "R")
+
+    # inserters: seed from bodies, transfer belt->belt (taps), always onto the FAR lane
+    name_at = {t: n for n, b in bodies.items() for t in b.tiles()}
+    tags: dict = {}                                # (lane_node, lane) -> set of product tags
+    work: list = []
+
+    def add(node, lane, ts):
+        cur = tags.setdefault((node, lane), set())
+        if not ts <= cur:
+            cur |= ts
+            work.append((node, lane))
+
+    for e in layout.entities:
+        if e.proto != INSERTER:
+            continue
+        dx, dy = DIR_DELTA[e.direction]
+        pick, drop = (e.x + dx, e.y + dy), (e.x - dx, e.y - dy)
+        de = trans_at.get(drop)
+        if de is None:
+            continue                               # drops into a body/chest: no belt lane
+        dd = de.direction or 0
+        o = ((e.x) - drop[0], (e.y) - drop[1])     # from drop tile toward the inserter
+        if o == left(dd):
+            dls = ("R",)                           # inserter on the left -> far = right lane
+        elif o == (-left(dd)[0], -left(dd)[1]):
+            dls = ("L",)
+        else:
+            dls = ("L", "R")                       # parallel arm: could land either lane
+        dst = lane_id(de, drop)
+        if pick in name_at:                        # body -> belt: seed the product tag
+            for dl in dls:
+                add(dst, dl, {tag_of(name_at[pick])})
+        elif pick in trans_at:                     # belt -> belt: a tap moves EITHER lane
+            src = lane_id(trans_at[pick], pick)
+            for dl in dls:
+                link(src, "L", dst, dl)
+                link(src, "R", dst, dl)
+
+    for node_lane in list(tags):                   # fixpoint over the lane graph
+        work.append(node_lane)
+    while work:
+        node, lane = work.pop()
+        ts = tags.get((node, lane), set())
+        for dst, dl in edges.get((node, lane), ()):
+            add(dst, dl, ts)
+
+    mixed = sorted(f"{node}:{lane}={'+'.join(sorted(ts))}"
+                   for (node, lane), ts in tags.items() if len(ts) > 1)
+    report.add("no item mixing on a belt lane (max two products per belt, one per side)",
+               not mixed, "" if not mixed else "mixed lanes: " + "; ".join(mixed[:4]))
 
 
 def _check_fluids(graph: Graph, layout: Layout, bodies, report: Report) -> None:

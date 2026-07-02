@@ -116,3 +116,65 @@ def test_breaking_an_output_inserter_breaks_its_lane():
     report = verify(g, lay)
     assert not report.ok
     assert ("iron_a", "gears") not in report.lanes_found
+
+
+# --- item mixing on belt lanes (a belt: two sides, ONE product per side) ----------
+_TWO_PRODUCTS = "\n".join([
+    "input iron   : iron-plate",
+    "input copper : copper-plate",
+    "output out",
+    "",
+    "iron   -> out",
+    "copper -> out",
+])
+
+
+def _two_product_layout(separated):
+    """Hand-built: iron and copper meet at the pick tile (4,2) of out's inserter.
+    ``separated``: each side-loads from an opposite side -- one product per lane
+    (legal). Otherwise copper joins iron's column one tile early, landing on a lane
+    iron already uses -- mixing (illegal)."""
+    from fgr.ir import NORTH, SOUTH, WEST
+    from fgr.layout import CHEST_INPUT, CHEST_OUTPUT, Layout, PlacedEntity
+
+    g = parse(_TWO_PRODUCTS)
+    lay = Layout()
+    lay.add(PlacedEntity(CHEST_INPUT, 0, 0, item="iron-plate", meta={"node": "iron"}))
+    lay.add(PlacedEntity(CHEST_INPUT, 0, 4, item="copper-plate", meta={"node": "copper"}))
+    lay.add(PlacedEntity(CHEST_OUTPUT, 6, 2, meta={"node": "out"}))
+    lay.add(PlacedEntity(BELT, 4, 2, direction=EAST, meta={}))     # shared pick tile
+    lay.add(PlacedEntity(INSERTER, 5, 2, direction=WEST, meta={}))  # -> out chest
+    # iron: chest -> eastward run -> south down column x=4 into the pick tile
+    lay.add(PlacedEntity(INSERTER, 1, 0, direction=WEST, meta={}))
+    for x in (2, 3):
+        lay.add(PlacedEntity(BELT, x, 0, direction=EAST, meta={}))
+    lay.add(PlacedEntity(BELT, 4, 0, direction=SOUTH, meta={}))
+    lay.add(PlacedEntity(BELT, 4, 1, direction=SOUTH, meta={}))
+    lay.add(PlacedEntity(INSERTER, 1, 4, direction=WEST, meta={}))
+    lay.add(PlacedEntity(BELT, 2, 4, direction=EAST, meta={}))
+    if separated:
+        # copper arrives from the SOUTH side of the pick tile: its own lane
+        lay.add(PlacedEntity(BELT, 3, 4, direction=EAST, meta={}))
+        lay.add(PlacedEntity(BELT, 4, 4, direction=NORTH, meta={}))
+        lay.add(PlacedEntity(BELT, 4, 3, direction=NORTH, meta={}))
+    else:
+        # copper side-loads into iron's column at (4,1): shares iron's lane
+        lay.add(PlacedEntity(BELT, 3, 4, direction=NORTH, meta={}))
+        lay.add(PlacedEntity(BELT, 3, 3, direction=NORTH, meta={}))
+        lay.add(PlacedEntity(BELT, 3, 2, direction=NORTH, meta={}))
+        lay.add(PlacedEntity(BELT, 3, 1, direction=EAST, meta={}))
+    return g, lay
+
+
+def test_lane_separated_products_pass():
+    g, lay = _two_product_layout(separated=True)
+    report = verify(g, lay)
+    assert report.ok, report.format()
+
+
+def test_same_lane_mixing_fails():
+    g, lay = _two_product_layout(separated=False)
+    report = verify(g, lay)
+    bad = [c for c in report.checks if "mixing on a belt lane" in c.name][0]
+    assert not bad.ok, "two products sharing one belt lane must be flagged"
+    assert "copper-plate" in bad.detail and "iron-plate" in bad.detail

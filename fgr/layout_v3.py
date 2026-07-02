@@ -80,6 +80,7 @@ def _axis(d):
 class _Plan:
     net: str
     kind: str                                  # "belt" | "pipe"
+    tag: str = ""                              # product carried (belt nets)
     ops: dict = field(default_factory=dict)    # tile -> ("belt",dir)|("ug_in",dir)|("ug_out",dir)
     #                                            | ("pipe",)|("p2g",mouth_dir)
     ins: list = field(default_factory=list)    # (tile, dir, meta) inserters (belt nets)
@@ -171,6 +172,7 @@ class _BeltNet:
     net: str
     producer: str
     consumers: list                              # consumer names, routing order
+    tag: str = ""                                # the product carried (item/recipe)
 
 
 @dataclass
@@ -200,7 +202,7 @@ def _build_nets(graph: Graph, bodies) -> tuple[list[_BeltNet], list[_FluidNet]]:
             cx, cy = bodies[c].center
             return abs(cx - px) + abs(cy - py)
         consumers = sorted(dict.fromkeys(by_src[p]), key=lambda c: (dist(c), c))
-        belt_nets.append(_BeltNet(f"b:{p}", p, consumers))
+        belt_nets.append(_BeltNet(f"b:{p}", p, consumers, _fluid_tag(graph, p)))
 
     # Fluid nets: same-fluid connected components of the DECLARED edges -- but merged
     # only when the component is a full biclique (every producer x consumer pair is
@@ -266,6 +268,26 @@ class _Ctx:
         self.body_tiles: dict[str, set] = {n: set(b.tiles()) for n, b in bodies.items()}
         self.all_body_tiles: set = set().union(*self.body_tiles.values()) if bodies else set()
         self.tile_owner = {t: n for n, ts in self.body_tiles.items() for t in ts}
+
+        # PAIR SINKS: a consumer whose DISTINCT-product item fan-in exceeds its inserter
+        # faces can't give every product its own belt. A belt holds two products, one
+        # per side (lane), so such sinks pair products up: both side-load one shared
+        # pick tile from OPPOSITE sides -- each collapses onto its own lane, no mixing.
+        # Used only when forced: half a belt starves throughput, so whole-belt lanes
+        # stay the norm and pairing is the overflow mechanism.
+        self.pair_partner: dict = {}               # (consumer, tag) -> partner tag
+        by_dst: dict = {}
+        for e in graph.edges:
+            if not e.fluid:
+                by_dst.setdefault(e.dst, set()).add(_fluid_tag(graph, e.src))
+        for c, tags in by_dst.items():
+            faces = 2 * sum(SIZE[_node_proto(graph, c, fluid_sinks)])
+            if len(tags) <= faces:
+                continue
+            ordered = sorted(tags)
+            for i in range(0, len(ordered) - 1, 2):
+                self.pair_partner[(c, ordered[i])] = ordered[i + 1]
+                self.pair_partner[(c, ordered[i + 1])] = ordered[i]
 
         # live fluid-box external tiles, per verifier semantics: an assembler has boxes
         # only when it's a fluid endpoint; chemical/tank/source always do.
@@ -441,8 +463,9 @@ def _try_accept(ctx, state, net_id, kind, tile, din, via, opts, pres, prev, key)
             if via == "jump":
                 continue                          # must arrive as a plain surface pipe
             return (0, opt)
-        if opt[0] == "drop":                      # ("drop", face_tile, ins_dir)
-            _k, f, ins_dir = opt
+        if opt[0] == "drop":                      # ("drop", face_tile, ins_dir, side?)
+            _k, f, ins_dir = opt[:3]
+            prefer_side = len(opt) > 3 and opt[3]
             if path_tiles is None:
                 path_tiles = set()
                 k = key
@@ -460,7 +483,27 @@ def _try_accept(ctx, state, net_id, kind, tile, din, via, opts, pres, prev, key)
             if f in path_tiles:
                 continue                          # the route itself uses this face tile
             extra = FACE + state.price(("S", f[0], f[1]), net_id, pres)
-            leaf = _leaf_dir(ctx, state, net_id, tile, din, via, pres)
+            if prefer_side:
+                # pair-sink pick tile: the belt must run ALONG the face normal with a
+                # LATERAL side-feed, so the opposite lateral side stays open for the
+                # partner product's side-load (host approaching along the normal would
+                # leave only the face tile free -- where this inserter stands).
+                if via == "jump" or (din is not None
+                                     and din in (ins_dir, OPPOSITE[ins_dir])):
+                    continue
+                leaf = None
+                push = _foreign_pushers(state, net_id, tile)
+                for e in (ins_dir, OPPOSITE[ins_dir]):
+                    pen = sum(pres for _n2, m in push if e != OPPOSITE[m])
+                    front = (tile[0] + DIR_DELTA[e][0], tile[1] + DIR_DELTA[e][1])
+                    if _accepting(state, net_id, front, e):
+                        pen += pres
+                    if leaf is None or pen < leaf[1]:
+                        leaf = (e, pen)
+                    if pen == 0:
+                        break
+            else:
+                leaf = _leaf_dir(ctx, state, net_id, tile, din, via, pres)
             if leaf is None:
                 continue
             e, weld_pen = leaf
@@ -482,16 +525,21 @@ def _try_accept(ctx, state, net_id, kind, tile, din, via, opts, pres, prev, key)
     return None
 
 
-def _leaf_dir(ctx, state, net_id, tile, din, via, pres):
+def _leaf_dir(ctx, state, net_id, tile, din, via, pres, prefer_side=False):
     """Orientation for a terminal pick tile: must accept the incoming flow; SHOULD not
     push into a foreign accepting carrier nor take a foreign side-feed, but those are
-    soft (priced welds the negotiation clears). Returns (dir, weld_penalty) or None."""
+    soft (priced welds the negotiation clears). Returns (dir, weld_penalty) or None.
+    ``prefer_side`` orients the belt PERPENDICULAR to the arrival when possible, making
+    the pick tile side-fed -- the shape a pair partner can later side-load from the
+    opposite side (see _Ctx.pair_partner)."""
     push = _foreign_pushers(state, net_id, tile)
     if via == "jump":                             # ug exit: direction fixed = din
         cand = [din]
+    elif din is None:
+        cand = list(CARDINALS)
     else:
-        cand = ([din] if din is not None else []) + [d for d in CARDINALS
-                                                     if d != din and d != (OPPOSITE[din] if din is not None else None)]
+        perp = [d for d in CARDINALS if d not in (din, OPPOSITE[din])]
+        cand = perp + [din] if prefer_side else [din] + perp
     best = None
     for e in cand:
         pen = sum(pres for _n, m in push if e != OPPOSITE[m])
@@ -508,40 +556,66 @@ def _leaf_dir(ctx, state, net_id, tile, din, via, pres):
 # ---------------------------------------------------------------------------
 # Belt net routing: sequential Steiner over consumers with flexible pins.
 # ---------------------------------------------------------------------------
-def _belt_targets(ctx: _Ctx, state: _State, net_id, consumer, used_faces, own_block):
-    """Target map for one consumer: face drops + safe merges into foreign branches."""
+def _belt_targets(ctx: _Ctx, state: _State, net_id, tag, consumer, used_faces, own_block):
+    """Target map for one consumer: face drops + safe merges into foreign branches
+    CARRYING THE SAME PRODUCT -- different products never share a belt (the verifier
+    would allow one per side, but half a belt starves throughput; keep lanes whole)."""
     targets: dict = {}
     body = ctx.bodies[consumer]
+    partner = ctx.pair_partner.get((consumer, tag))
     for f, outward in _faces(body):
         if ctx.blocked(f) or f in used_faces or f in own_block:
             continue
         pick = (f[0] + DIR_DELTA[outward][0], f[1] + DIR_DELTA[outward][1])
         if ctx.blocked(pick):
             continue
-        targets.setdefault(pick, []).append(("drop", f, outward))
+        targets.setdefault(pick, []).append(("drop", f, outward, partner is not None))
     want = frozenset((consumer,))
+    # tiles already hosting a cross-product pair are FULL (a third feed would land on
+    # one of the two occupied lanes)
+    locked = {H for pm in state.plans.values() for h, H, _mt, _c in pm.merges
+              if pm.kind == "belt" and h in state.plans and pm.tag != state.plans[h].tag}
     for host_id in state.plans:                   # committed order = deterministic
         plan = state.plans[host_id]
         if plan.kind != "belt":
             continue
-        for H in sorted(plan.ops):
-            if plan.ops[H][0] != "belt":
-                continue
-            fr, grounded = _flow_reach(state, plan, H)
-            if not grounded or fr != want:
-                continue
-            b = plan.ops[H][1]
-            for m in CARDINALS:
-                if b == OPPOSITE[m]:
-                    continue                      # head-on: host rejects the feed
-                X = (H[0] - DIR_DELTA[m][0], H[1] - DIR_DELTA[m][1])
+        if plan.tag == tag:
+            for H in sorted(plan.ops):
+                if plan.ops[H][0] != "belt" or H in locked:
+                    continue
+                fr, grounded = _flow_reach(state, plan, H)
+                if not grounded or fr != want:
+                    continue
+                b = plan.ops[H][1]
+                for m in CARDINALS:
+                    if b == OPPOSITE[m]:
+                        continue                  # head-on: host rejects the feed
+                    X = (H[0] - DIR_DELTA[m][0], H[1] - DIR_DELTA[m][1])
+                    if not ctx.blocked(X):
+                        targets.setdefault(X, []).append(("merge", host_id, H, m))
+        elif plan.tag == partner:
+            # PAIR: side-load the partner's pick tile from the side OPPOSITE its own
+            # feed -- each product collapses onto its own lane (no mixing), and the
+            # partner's inserter lifts both into the sink.
+            for t, d, meta in plan.ins:
+                if meta.get("role") != "in" or meta.get("edge", (None, None))[1] != consumer:
+                    continue
+                P = (t[0] + DIR_DELTA[d][0], t[1] + DIR_DELTA[d][1])
+                if plan.ops.get(P, ("",))[0] != "belt" or P in locked:
+                    continue
+                e = plan.ops[P][1]
+                feeds = [m0 for _n, m0 in state.pushers.get(P, ()) if m0 != OPPOSITE[e]]
+                if len(feeds) != 1 or feeds[0] in (e, OPPOSITE[e]):
+                    continue                      # need exactly one, side-fed
+                m = OPPOSITE[feeds[0]]
+                X = (P[0] - DIR_DELTA[m][0], P[1] - DIR_DELTA[m][1])
                 if not ctx.blocked(X):
-                    targets.setdefault(X, []).append(("merge", host_id, H, m))
+                    targets.setdefault(X, []).append(("merge", host_id, P, m))
     return targets
 
 
 def _route_belt_net(ctx: _Ctx, state: _State, net: _BeltNet, pres):
-    plan = _Plan(net.net, "belt")
+    plan = _Plan(net.net, "belt", tag=net.tag)
     producer = ctx.bodies[net.producer]
     tree: dict = {}                               # tile -> (op, dir); the growing tree
     parent: dict = {}
@@ -555,7 +629,7 @@ def _route_belt_net(ctx: _Ctx, state: _State, net: _BeltNet, pres):
     for consumer in net.consumers:
         c_tiles = ctx.body_tiles[consumer]
         own_block = plan.sclaims | set(tree)
-        targets = _belt_targets(ctx, state, net.net, consumer, used_faces, own_block)
+        targets = _belt_targets(ctx, state, net.net, net.tag, consumer, used_faces, own_block)
 
         # (0) zero-move options: attach an input inserter where the committed tree
         # already runs past a face (v2's "direct trunk tap"), or bridge two adjacent
@@ -567,7 +641,7 @@ def _route_belt_net(ctx: _Ctx, state: _State, net: _BeltNet, pres):
             for opt in opts:
                 if opt[0] != "drop":
                     continue
-                _k, f, ins_dir = opt
+                _k, f, ins_dir = opt[:3]
                 if f in tree or f in p_tiles:
                     continue
                 c = ATTACH + state.price(("S", f[0], f[1]), net.net, pres)
@@ -996,6 +1070,15 @@ def _audit(ctx: _Ctx, state: _State):
             fr, grounded = _flow_reach(state, hp, H)
             if not grounded or fr != frozenset((consumer,)):
                 orphans.add(nid)
+                continue
+            if state.plans[nid].tag != hp.tag:
+                # cross-product PAIR: lane separation holds only while the shared pick
+                # tile has exactly two feeds from opposite sides (one lane each)
+                e = hp.ops[H][1]
+                feeds = [m for _n, m in state.pushers.get(H, ()) if m != OPPOSITE[e]]
+                if (len(feeds) != 2 or feeds[0] != OPPOSITE[feeds[1]]
+                        or feeds[0] in (e, OPPOSITE[e])):
+                    orphans.add(nid)
     unrouted = {nid for nid in state.plans if state.plans[nid].unrouted}
     return overused, weld_nets, weld_tiles, orphans, unrouted
 
