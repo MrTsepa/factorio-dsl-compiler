@@ -47,7 +47,9 @@ CARDINALS = (NORTH, EAST, SOUTH, WEST)
 # --- routing costs (integers; relative scale is what matters) -----------------
 SURF = 10        # one surface belt/pipe tile
 TURN = 4         # a corner (straight spines are the stated cleanliness goal)
-BUR_BELT = 8     # one buried belt tile (dives are compact but use scarce lines)
+BUR_BELT = 10    # one buried belt tile: same as surface, so with JUMP_END a dive only
+#                  ever wins when something actually blocks the surface (no dashed-line
+#                  tunnels across open ground); pipes stay cheaper buried on purpose
 BUR_PIPE = 6     # one buried pipe tile (tunnels preferred for long fluid runs)
 JUMP_END = 7     # per dive (entrance+exit overhead)
 ROOT = 14        # first output inserter of a net
@@ -87,6 +89,7 @@ class _Plan:
     parent: dict = field(default_factory=dict)  # tile -> parent tile (belt tree)
     reach: dict = field(default_factory=dict)   # tile -> frozenset(consumers downstream)
     merges: list = field(default_factory=list)  # (host_net, host_tile, my_tile, consumer)
+    manc: list = field(default_factory=list)    # (merge_record, frozenset(ancestor tiles))
     welds: set = field(default_factory=set)     # (other_net, tile) soft welds accepted
     unrouted: list = field(default_factory=list)
     box_lands: list = field(default_factory=list)  # (machine, tile) fluid attachments
@@ -353,7 +356,7 @@ def _dijkstra(ctx: _Ctx, state: _State, net_id, kind, sources, targets, tree_til
     # A*: admissible remaining-cost bound = manhattan distance to the nearest target
     # x the cheapest possible per-tile rate (a long dive; soft prices only add).
     t_list = list(targets)
-    h_rate = 8 if kind == "belt" else BUR_PIPE
+    h_rate = SURF if kind == "belt" else BUR_PIPE   # jumps cost >= SURF/tile for belts
 
     def h(t):
         return min(abs(t[0] - a[0]) + abs(t[1] - a[1]) for a in t_list) * h_rate
@@ -449,9 +452,13 @@ def _try_accept(ctx, state, net_id, kind, tile, din, via, opts, pres, prev, key)
                     if a[1:2] in (("step",), ("jump",)):
                         k = a[0]
                     else:
+                        if a[0] == "tap":         # source inserter tile is taken too
+                            path_tiles.add(a[2])
+                        elif a[0] == "root":
+                            path_tiles.add(a[1])
                         break
             if f in path_tiles:
-                continue                          # the route itself runs over this face
+                continue                          # the route itself uses this face tile
             extra = FACE + state.price(("S", f[0], f[1]), net_id, pres)
             leaf = _leaf_dir(ctx, state, net_id, tile, din, via, pres)
             if leaf is None:
@@ -512,14 +519,16 @@ def _belt_targets(ctx: _Ctx, state: _State, net_id, consumer, used_faces, own_bl
         if ctx.blocked(pick):
             continue
         targets.setdefault(pick, []).append(("drop", f, outward))
+    want = frozenset((consumer,))
     for host_id in state.plans:                   # committed order = deterministic
         plan = state.plans[host_id]
         if plan.kind != "belt":
             continue
-        for H in sorted(plan.reach):
-            if plan.reach[H] != frozenset((consumer,)):
+        for H in sorted(plan.ops):
+            if plan.ops[H][0] != "belt":
                 continue
-            if plan.ops.get(H, ("",))[0] != "belt":
+            fr, grounded = _flow_reach(state, plan, H)
+            if not grounded or fr != want:
                 continue
             b = plan.ops[H][1]
             for m in CARDINALS:
@@ -680,6 +689,7 @@ def _path_ins_clash(res):
     for t in ins_tiles:
         if t in seen:
             return t
+        seen.add(t)                               # also catches tap-ins == drop-face
     return None
 
 
@@ -779,7 +789,10 @@ def _apply_path(ctx, state, plan, tree, parent, attach, used_faces, consumer, re
         if end in tree and tree[end][0] == "belt":
             tree[end] = ("belt", mdir)
         plan.merges.append((host, H, end, consumer))
-        attach.append((consumer, end))
+        # NOT an `attach`: reach labels must stay grounded in REAL (inserter/bridge)
+        # attachments. If merged branches also earned reach, two nets could merge into
+        # each other -- reach-valid on both sides, physically a flow cycle that never
+        # arrives (the audit would score 0 while the verifier reports missing lanes).
     # soft welds accepted along the way are found in a post-pass (cheap and exact)
 
 
@@ -787,11 +800,46 @@ def _finish_belt_plan(plan: _Plan, tree, parent, attach):
     plan.ops = dict(tree)
     plan.parent = dict(parent)
     reach: dict = {}
-    for consumer, t in attach:
+    for consumer, t in attach:                    # REAL (inserter/bridge) attaches only
         while t is not None:
             reach.setdefault(t, set()).add(consumer)
             t = parent.get(t)
     plan.reach = {t: frozenset(s) for t, s in reach.items()}
+    # ancestors of each merge point: tiles whose flow continues INTO that merge
+    plan.manc = []
+    for rec in plan.merges:
+        anc = set()
+        t = rec[2]
+        while t is not None:
+            anc.add(t)
+            t = parent.get(t)
+        plan.manc.append((rec, frozenset(anc)))
+
+
+def _flow_reach(state: _State, plan: _Plan, tile, seen=frozenset()):
+    """Consumers TRULY downstream of `tile` in `plan`: real attaches plus, transitively,
+    what its merges feed into. Returns (consumers, grounded); a merge chain that loops
+    back onto itself or lands on a missing/rerouted host is NOT grounded. Both the
+    naive alternatives fail: counting merges as attaches lets two nets merge into each
+    other (a flow cycle the audit can't see); ignoring them under-reports downstream
+    flow, so foreign merges upstream of a merge point leak items (spurious lanes)."""
+    key = (plan.net, tile)
+    if key in seen:
+        return frozenset(), False
+    seen = seen | {key}
+    out = set(plan.reach.get(tile, ()))
+    grounded = True
+    for (host, H, _mt, _c), anc in plan.manc:
+        if tile not in anc:
+            continue
+        hp = state.plans.get(host)
+        if hp is None or hp.ops.get(H, ("",))[0] != "belt":
+            grounded = False
+            continue
+        sub, ok = _flow_reach(state, hp, H, seen)
+        out |= sub
+        grounded = grounded and ok
+    return frozenset(out), grounded
 
 
 # ---------------------------------------------------------------------------
@@ -942,8 +990,11 @@ def _audit(ctx: _Ctx, state: _State):
     for nid in state.plans:
         for host, H, _mt, consumer in state.plans[nid].merges:
             hp = state.plans.get(host)
-            if (hp is None or hp.ops.get(H, ("",))[0] != "belt"
-                    or hp.reach.get(H) != frozenset((consumer,))):
+            if hp is None or hp.ops.get(H, ("",))[0] != "belt":
+                orphans.add(nid)
+                continue
+            fr, grounded = _flow_reach(state, hp, H)
+            if not grounded or fr != frozenset((consumer,)):
                 orphans.add(nid)
     unrouted = {nid for nid in state.plans if state.plans[nid].unrouted}
     return overused, weld_nets, weld_tiles, orphans, unrouted
