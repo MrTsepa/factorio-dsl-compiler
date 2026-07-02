@@ -2,6 +2,7 @@
 
     python -m fgr compile examples/basic/gears.fgr            # -> blueprint string + verify
     python -m fgr compile examples/basic/gears.fgr -o out.png # also render via FBSR
+    python -m fgr compile examples/basic/gears.fgr -g v1      # use the v1 (search) generator
     python -m fgr verify  examples/basic/gears.fgr            # just print the verifier report
 """
 
@@ -13,14 +14,20 @@ from pathlib import Path
 
 from .blueprint import to_blueprint_string
 from .dsl import DslError, parse
-from .layout import LayoutError, compile_graph
+from .generators import DEFAULT as DEFAULT_GENERATOR
+from .generators import GENERATORS
+from .generators import compile_graph as _compile_graph
+from .layout import LayoutError as LayoutErrorV2
+from .layout_v1 import LayoutError as LayoutErrorV1
 from .verify import verify
 
+LayoutError = (LayoutErrorV1, LayoutErrorV2)
 
-def _build(path: str):
+
+def _build(path: str, generator: str = DEFAULT_GENERATOR):
     text = Path(path).read_text()
     graph = parse(text)
-    layout = compile_graph(graph)
+    layout = _compile_graph(graph, generator)
     return graph, layout
 
 
@@ -38,7 +45,7 @@ def _recipe_lint(graph):
 
 
 def cmd_compile(args) -> int:
-    graph, layout = _build(args.source)
+    graph, layout = _build(args.source, args.generator)
     report = verify(graph, layout)
     bp = to_blueprint_string(layout, label=Path(args.source).stem)
 
@@ -65,7 +72,7 @@ def cmd_compile(args) -> int:
 
 
 def cmd_verify(args) -> int:
-    graph, layout = _build(args.source)
+    graph, layout = _build(args.source, args.generator)
     report = verify(graph, layout)
     print(report.format())
     recipes_ok = _recipe_lint(graph)
@@ -94,10 +101,14 @@ def main(argv=None) -> int:
     c.add_argument("source")
     c.add_argument("-o", "--out", help="render the layout to this PNG (needs FBSR service)")
     c.add_argument("--bp-out", help="write the raw blueprint string to this file")
+    c.add_argument("-g", "--generator", choices=sorted(GENERATORS), default=DEFAULT_GENERATOR,
+                   help=f"layout generator to use (default: {DEFAULT_GENERATOR})")
     c.set_defaults(func=cmd_compile)
 
     v = sub.add_parser("verify", help="print the verifier report for a .fgr file")
     v.add_argument("source")
+    v.add_argument("-g", "--generator", choices=sorted(GENERATORS), default=DEFAULT_GENERATOR,
+                   help=f"layout generator to use (default: {DEFAULT_GENERATOR})")
     v.set_defaults(func=cmd_verify)
 
     m = sub.add_parser("validate-model",
