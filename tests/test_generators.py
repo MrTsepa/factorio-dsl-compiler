@@ -18,8 +18,8 @@ SIMPLE = "\n".join([
 ])
 
 
-def test_default_generator_is_v2():
-    assert DEFAULT == "v2"
+def test_default_generator_is_v3():
+    assert DEFAULT == "v3"
 
 
 @pytest.mark.parametrize("name", sorted(GENERATORS))

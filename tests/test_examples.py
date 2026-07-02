@@ -1,8 +1,7 @@
 """Regression guard over EVERY example: each must compile (never crash) and the verifier
-must pass. Cases the v2 lane-fabric engine doesn't fully route yet (complex multi-fluid
-oil chains, very high fan-in, congested reconvergence) are listed in KNOWN_FAILING and
-xfail'd -- shrinking that set to empty is the goal. A KNOWN_FAILING case that starts
-passing fails loudly so we delist it.
+must pass, on the DEFAULT generator (v3, the global negotiated router). KNOWN_FAILING is
+the xfail'd tail -- EMPTY since v3: it routes all 49 (v2's tail was fluids_7 + scale_1 +
+scale_5). A KNOWN_FAILING case that starts passing fails loudly so we delist it.
 """
 import glob
 import os
@@ -10,7 +9,7 @@ import os
 import pytest
 
 from fgr.dsl import parse
-from fgr.layout import compile_graph
+from fgr.generators import compile_graph
 from fgr.verify import verify
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,12 +20,8 @@ def _rel(p):
     return p.split("examples" + os.sep)[1].replace(os.sep, "/")
 
 
-# v2 doesn't yet fully verify these (tracked tail). Keep sorted; delete as they get fixed.
-KNOWN_FAILING = {
-    "stress/fluids_7.fgr",
-    "stress/scale_1.fgr",
-    "stress/scale_5.fgr",
-}
+# The default generator's unfixed tail (xfail). Empty since v3; keep sorted if it regrows.
+KNOWN_FAILING: set = set()
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=_rel)
@@ -38,7 +33,7 @@ def test_example_compiles_and_verifies(path):
     if rel in KNOWN_FAILING:
         if rep.ok:
             pytest.fail(f"{rel} now PASSES -- remove it from KNOWN_FAILING")
-        pytest.xfail(f"v2 tail (not yet routed): {[c.name for c in rep.checks if not c.ok]}")
+        pytest.xfail(f"tracked tail (not yet routed): {[c.name for c in rep.checks if not c.ok]}")
     assert rep.ok, f"{rel}:\n{rep.format()}"
 
 

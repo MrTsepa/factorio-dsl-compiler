@@ -3,7 +3,7 @@ same entities -- otherwise a "verified" layout wouldn't actually load in Factori
 from fgr.blueprint import to_blueprint, to_blueprint_string
 from fgr.dsl import parse
 from fgr.encode import decode_blueprint_string
-from fgr.layout import compile_graph
+from fgr.generators import compile_graph
 
 SPEC = """
 input iron : iron-plate

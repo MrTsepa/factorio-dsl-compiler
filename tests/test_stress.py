@@ -4,7 +4,7 @@ These guard the rip-up router + perimeter ports + position-agnostic manifolds.""
 import pytest
 
 from fgr.dsl import parse
-from fgr.layout import compile_graph
+from fgr.generators import compile_graph
 from fgr.verify import verify
 
 REC, ITEM = "iron-gear-wheel", "iron-plate"
@@ -76,17 +76,19 @@ CASES = {
 }
 
 
-_V2_TAIL = {"bipartite[4x4]", "ratio_3wire_2circuit"}   # dense many-to-many, not yet routed
+# The default generator's unfixed tail (xfail). Empty since v3 (v2's tail was
+# bipartite[4x4] + ratio_3wire_2circuit); the delist-me guard stays for regrowth.
+_TAIL: set = set()
 
 
 @pytest.mark.parametrize("name", list(CASES))
 def test_stress_case_verifies(name):
     g = parse(CASES[name])
     report = verify(g, compile_graph(g))
-    if name in _V2_TAIL:
+    if name in _TAIL:
         if report.ok:
-            pytest.fail(f"{name} now PASSES -- remove from _V2_TAIL")
-        pytest.xfail("v2 tail (not yet routed)")
+            pytest.fail(f"{name} now PASSES -- remove from _TAIL")
+        pytest.xfail("tracked tail (not yet routed)")
     assert report.ok, f"{name} should verify:\n{report.format()}"
     assert report.lanes_found == {(e.src, e.dst) for e in g.edges}
 

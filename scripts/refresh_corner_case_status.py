@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from fgr.dsl import parse                          # noqa: E402
-from fgr.layout import compile_graph                # noqa: E402
+from fgr.generators import compile_graph            # noqa: E402
 from fgr.verify import verify                       # noqa: E402
 
 STATUS_RE = re.compile(r"^# STATUS \(engine [0-9a-f]+\): .*$")

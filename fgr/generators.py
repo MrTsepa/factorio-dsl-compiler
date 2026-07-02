@@ -1,13 +1,15 @@
 """One interface over the interchangeable layout generators.
 
 The POC's premise is that the *generator* is swappable and :mod:`fgr.verify` is the oracle that
-grades whatever it produces. Two concrete generators live in the tree:
+grades whatever it produces. Three concrete generators live in the tree:
 
     v1  -- the original search router (fixed grid + A* wire routing with rip-up/retry).
     v2  -- the deterministic lane-fabric engine (four passes, no search; see fgr/layout.py).
+    v3  -- v2's placement + a global negotiated-congestion router (fgr/layout_v3.py); the
+           default since it passes the full 155-case battery that v1/v2 each fail parts of.
 
-Both expose the same ``compile_graph(graph) -> Layout`` signature, so anything downstream (verifier,
-blueprint export, renderers, tests, the comparison script) can target either by name.
+All expose the same ``compile_graph(graph) -> Layout`` signature, so anything downstream (verifier,
+blueprint export, renderers, tests, the comparison script) can target any by name.
 """
 from __future__ import annotations
 
@@ -22,7 +24,7 @@ GENERATORS = {
     "v2": _v2.compile_graph,   # deterministic lane fabric; fast and robust, cleaner layouts
     "v3": _v3.compile_graph,   # global negotiated-congestion router (PathFinder-style)
 }
-DEFAULT = "v2"
+DEFAULT = "v3"
 
 
 def compile_graph(graph: Graph, generator: str = DEFAULT) -> Layout:
