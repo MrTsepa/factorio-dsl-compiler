@@ -1,5 +1,5 @@
 # Diamond reconvergence width=8: split -> 8 parallel -> join.
-# STATUS (engine 6ed9b79): FAIL -> every declared belt lane physically connects
+# STATUS (engine e3e2314): FAIL -> every declared belt lane physically connects
 
 input iron : iron-plate
 assembler split : iron-gear-wheel

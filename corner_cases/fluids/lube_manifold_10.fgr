@@ -1,5 +1,5 @@
 # Lube manifold N=10: PURE fluid, heavy-oil -> 10 lube plants -> tank (fluid-vs-fluid pack + same-fluid weld).
-# STATUS (engine 6ed9b79): FAIL -> every fluid lane connects at a real fluid-box (pipe network)
+# STATUS (engine e3e2314): PASS (verifies)
 
 fluid heavy : heavy-oil
 chemical lube0 : lubricant
