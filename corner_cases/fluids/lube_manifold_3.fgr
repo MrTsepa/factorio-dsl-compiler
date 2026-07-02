@@ -1,5 +1,5 @@
 # Lube manifold N=3: PURE fluid, heavy-oil -> 3 lube plants -> tank (fluid-vs-fluid pack + same-fluid weld).
-# STATUS (engine 95100f1): PASS (verifies)
+# STATUS (engine 42f8714): PASS (verifies)
 
 fluid heavy : heavy-oil
 chemical lube0 : lubricant

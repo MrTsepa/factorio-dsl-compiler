@@ -23,10 +23,12 @@ routing; see docs/INSPIRATION.md):
     construction.
 
 Legality mirrors fgr/verify.py exactly: inserter `direction` points at its PICKUP;
-belts weld via accepting side-feeds (not head-on); underground belts pair with the
-nearest same-axis entity within UG_MAX_GAP (axis-line resources keep tunnels apart);
-pipes weld by 4-adjacency (a pipe-to-ground only on its mouth side) and pair within
-PIPE_UG_GAP; a pipe attaches to a machine only ON a fluid-box external tile.
+belts weld via accepting side-feeds (not head-on) -- and so do UNDERGROUND ENDS, whose
+belt half takes side input in-game (an entrance also takes its back feed; an exit's
+back is the tunnel); underground belts pair with the nearest same-axis entity within
+UG_MAX_GAP (axis-line resources keep tunnels apart); pipes weld by 4-adjacency (a
+pipe-to-ground only on its mouth side) and pair within PIPE_UG_GAP; a pipe attaches
+to a machine only ON a fluid-box external tile.
 """
 
 from __future__ import annotations

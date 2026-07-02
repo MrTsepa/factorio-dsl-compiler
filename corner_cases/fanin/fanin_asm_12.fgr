@@ -1,5 +1,5 @@
 # High fan-in N=12 into a single 3x3 assembler, then to output.
-# STATUS (engine 95100f1): PASS (verifies)
+# STATUS (engine 42f8714): PASS (verifies)
 
 input iron : iron-plate
 assembler p0 : copper-cable

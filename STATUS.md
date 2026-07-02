@@ -25,7 +25,10 @@ A "pass" means the layout was *independently graded* by `fgr/verify.py` as physi
 realising the spec: every declared belt/pipe lane connects, nothing spurious, no overlaps,
 fluids isolated and attached at real fluid-box tiles, and **no item mixing on a belt lane**
 — a belt has two sides, so it may carry at most two products, one per side (side-loading
-keeps them separable; two products on ONE side jam in-game). `tests/test_examples.py::KNOWN_FAILING`
+keeps them separable; two products on ONE side jam in-game). Underground belt ends count
+as side-loadable — their belt half takes side input in-game, with the hood blocking one
+of the feeder's lanes (the lane-filter mechanic) — so a belt dead-ending against a
+foreign tunnel is a real feed, not a no-op. `tests/test_examples.py::KNOWN_FAILING`
 (the xfail'd tail) is **empty**; `corner_cases/` files each self-document their verdict in a
 `# STATUS (engine <sha>)` header — refresh with `scripts/refresh_corner_case_status.py`.
 
@@ -38,9 +41,9 @@ comparison). Live numbers: run the script yourself.
 
 | generator | pass rate | timeouts | avg compile\* | total entities\* | belt turns\* | tunnel crossings\* |
 |---|---|---|---|---|---|---|
-| v1 (A\* rip-up) | 125 / 155 | 11 | 544 ms | 75,031 | 4,735 | 2,993 |
-| v2 (lane fabric) | 132 / 155 | 0 | **30 ms** | 265,618 | 1,867 | 9,880 |
-| **v3 (global router)** | **155 / 155** | **0** | 160 ms | **59,907** | **211** | **2,364** |
+| v1 (A\* rip-up) | 118 / 155 | 11 | 472 ms | 66,687 | 4,113 | 2,523 |
+| v2 (lane fabric) | 132 / 155 | 0 | **28 ms** | 265,618 | 1,867 | 9,880 |
+| **v3 (global router)** | **155 / 155** | **0** | 133 ms | **60,104** | **211** | **2,297** |
 
 <sub>\*each on that generator's own passing set.</sub>
 
@@ -48,9 +51,11 @@ comparison). Live numbers: run the script yourself.
   tail (congested belt risers: `fanin_asm_*`, `reconverge_*`, `butterfly_*`, `bus_4`;
   merged-fluid congestion: `refinery_4/6`; and the `examples/` stragglers `fluids_7`,
   `scale_1`, `scale_5`) and every case v1 hangs or mis-welds on. Nothing regressed. The
-  lane-mixing check costs v1 and v2 six passes each (their collectors merge different
-  products onto one lane — the in-game jam the check exists to catch); v3 routes those
-  same cases with same-product lanes and lane-separated pairs instead.
+  lane-mixing check costs v2 six passes (its collectors merge different products onto
+  one lane — the in-game jam the check exists to catch); v1 loses those six plus seven
+  more to side-loadable underground ends (belts it dead-ends against foreign tunnels
+  are real feeds in-game). v3 routes the same cases with same-product lanes,
+  lane-separated pairs, and tunnel-aware weld checks instead.
 - **Shape.** v3 is the *leanest* of the three: ~5.4× fewer entities than v2 on the corpus,
   and fewer even than v1 (which bought compactness with search). Belt turns collapse to 209
   total vs v2's 2,044 — merges and flexible pins remove almost every needless jog. Tunnel

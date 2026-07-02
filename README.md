@@ -350,17 +350,18 @@ inserter is dangling, every node is the right machine, the set of physically-pre
 lanes *exactly* equals the spec — every declared lane present, no extra ones, no two
 fluids sharing a pipe network — and no two products share a belt **side**: a belt has two
 lanes, and the checker tracks real lane physics (side-loads collapse onto the near lane,
-curves and undergrounds preserve lanes, inserters drop on the far lane), so two products
-may share a belt only when properly lane-separated.
+curves preserve lanes, underground ends take side-loads with their hood filtering one
+feeder lane, inserters drop on the far lane), so two products may share a belt only when
+properly lane-separated.
 
 Because the verifier is generator-agnostic, the layout generator itself is **swappable** —
 three live side by side behind one interface (`fgr.generators`):
 
 | generator | approach | pass rate\* | avg compile\*\* | notes |
 |---|---|---|---|---|
-| **v3** (default) | v2's placement + a **global negotiated-congestion router** (PathFinder-style) | **155 / 155** | 160 ms | passes the whole battery; leanest layouts (fewest entities/turns) |
-| v2 | deterministic **lane fabric**: 4 fixed passes, no search, no rip-up | 132 / 155 | **30 ms** | fastest; tail = congested fan-in + mixed-lane collectors |
-| v1 | fixed grid + **A\* rip-up** search router | 125 / 155 | 544 ms | can hang on large/congested graphs (11/155 timeouts) |
+| **v3** (default) | v2's placement + a **global negotiated-congestion router** (PathFinder-style) | **155 / 155** | 133 ms | passes the whole battery; leanest layouts (fewest entities/turns) |
+| v2 | deterministic **lane fabric**: 4 fixed passes, no search, no rip-up | 132 / 155 | **28 ms** | fastest; tail = congested fan-in + mixed-lane collectors |
+| v1 | fixed grid + **A\* rip-up** search router | 118 / 155 | 472 ms | can hang on large/congested graphs (11/155 timeouts) |
 
 <sub>\*across `examples/` (49 curated) + `corner_cases/` (106 generated stress cases),
 each run subprocess-isolated with a 10s timeout. \*\*on each generator's own passing set.</sub>
