@@ -17,13 +17,15 @@ default.**
 
 | Suite | Result |
 |-------|--------|
-| **pytest** | **117 passed, 0 xfailed** (green — the xfail tails are empty) |
+| **pytest** | **119 passed, 0 xfailed** (green — the xfail tails are empty) |
 | **examples/** (49 curated cases) that fully verify | **49 / 49** |
 | **corner_cases/** (106 generated stress cases) that fully verify | **106 / 106** |
 
 A "pass" means the layout was *independently graded* by `fgr/verify.py` as physically
 realising the spec: every declared belt/pipe lane connects, nothing spurious, no overlaps,
-fluids isolated and attached at real fluid-box tiles. `tests/test_examples.py::KNOWN_FAILING`
+fluids isolated and attached at real fluid-box tiles, and **no item mixing on a belt lane**
+— a belt has two sides, so it may carry at most two products, one per side (side-loading
+keeps them separable; two products on ONE side jam in-game). `tests/test_examples.py::KNOWN_FAILING`
 (the xfail'd tail) is **empty**; `corner_cases/` files each self-document their verdict in a
 `# STATUS (engine <sha>)` header — refresh with `scripts/refresh_corner_case_status.py`.
 
@@ -36,16 +38,19 @@ comparison). Live numbers: run the script yourself.
 
 | generator | pass rate | timeouts | avg compile\* | total entities\* | belt turns\* | tunnel crossings\* |
 |---|---|---|---|---|---|---|
-| v1 (A\* rip-up) | 131 / 155 | 11 | 506 ms | 79,540 | 4,991 | 3,163 |
-| v2 (lane fabric) | 138 / 155 | 0 | **25 ms** | 287,973 | 2,044 | 11,217 |
-| **v3 (global router)** | **155 / 155** | **0** | 183 ms | **52,965** | **209** | **2,255** |
+| v1 (A\* rip-up) | 125 / 155 | 11 | 544 ms | 75,031 | 4,735 | 2,993 |
+| v2 (lane fabric) | 132 / 155 | 0 | **30 ms** | 265,618 | 1,867 | 9,880 |
+| **v3 (global router)** | **155 / 155** | **0** | 160 ms | **59,907** | **211** | **2,364** |
 
 <sub>\*each on that generator's own passing set.</sub>
 
 - **Completeness.** v3 passes the entire battery — including every case in v2's tracked
   tail (congested belt risers: `fanin_asm_*`, `reconverge_*`, `butterfly_*`, `bus_4`;
   merged-fluid congestion: `refinery_4/6`; and the `examples/` stragglers `fluids_7`,
-  `scale_1`, `scale_5`) and every case v1 hangs or mis-welds on. Nothing regressed.
+  `scale_1`, `scale_5`) and every case v1 hangs or mis-welds on. Nothing regressed. The
+  lane-mixing check costs v1 and v2 six passes each (their collectors merge different
+  products onto one lane — the in-game jam the check exists to catch); v3 routes those
+  same cases with same-product lanes and lane-separated pairs instead.
 - **Shape.** v3 is the *leanest* of the three: ~5.4× fewer entities than v2 on the corpus,
   and fewer even than v1 (which bought compactness with search). Belt turns collapse to 209
   total vs v2's 2,044 — merges and flexible pins remove almost every needless jog. Tunnel
@@ -68,10 +73,15 @@ whole EMIT stage with a global router (`fgr/layout_v3.py`):
    group (merging never manufactures an undeclared producer→consumer pair).
 2. **Flexible pins.** The search itself chooses the output-inserter face, the consumer face,
    a tap on the net's own committed tree, a single-inserter bridge between adjacent bodies —
-   or a **merge into another net's branch** that flows to the same consumer. Merge hosts are
-   validated by *true flow reach* (real inserter attachments, propagated transitively
-   through grounded merges, cycle-guarded), so collector belts **emerge** where fan-in is
-   dense instead of being a special case.
+   or a **merge into another net's branch** that flows to the same consumer **and carries
+   the same product** (different products never share a belt: the verifier would allow one
+   per side, but half a belt starves throughput). Merge hosts are validated by *true flow
+   reach* (real inserter attachments, propagated transitively through grounded merges,
+   cycle-guarded), so collector belts **emerge** where fan-in is dense instead of being a
+   special case. The one forced exception — a sink whose distinct-product fan-in exceeds
+   its inserter faces (say 8 products into a 1×1 chest) — pairs products onto shared pick
+   tiles with **lane-separated side-loads from opposite sides**, one product per belt side,
+   which the audit re-validates every round.
 3. **Negotiated congestion (PathFinder).** All nets route with SOFT costs: foreign claims
    and weld-creating moves are passable at a price that grows each round, plus a history
    cost on chronically contended tiles. Each round rips up only the conflicted nets (merge

@@ -346,18 +346,21 @@ a material-flow graph from the placed tiles using real Factorio rules — an ins
 from the tile it faces and drops on the opposite one; a belt hands off to the belt in front;
 a pipe connects to adjacent pipes and across an underground tunnel; a chemical plant's fluid
 boxes sit at fixed (rotating) tiles. A layout **passes** only if nothing overlaps, no
-inserter is dangling, every node is the right machine, and the set of physically-present
-lanes *exactly* equals the spec — every declared lane present, no extra ones, and no two
-fluids sharing a pipe network.
+inserter is dangling, every node is the right machine, the set of physically-present
+lanes *exactly* equals the spec — every declared lane present, no extra ones, no two
+fluids sharing a pipe network — and no two products share a belt **side**: a belt has two
+lanes, and the checker tracks real lane physics (side-loads collapse onto the near lane,
+curves and undergrounds preserve lanes, inserters drop on the far lane), so two products
+may share a belt only when properly lane-separated.
 
 Because the verifier is generator-agnostic, the layout generator itself is **swappable** —
 three live side by side behind one interface (`fgr.generators`):
 
 | generator | approach | pass rate\* | avg compile\*\* | notes |
 |---|---|---|---|---|
-| **v3** (default) | v2's placement + a **global negotiated-congestion router** (PathFinder-style) | **155 / 155** | 183 ms | passes the whole battery; leanest layouts (fewest entities/turns) |
-| v2 | deterministic **lane fabric**: 4 fixed passes, no search, no rip-up | 138 / 155 | **25 ms** | fastest; tail = congested high fan-in |
-| v1 | fixed grid + **A\* rip-up** search router | 131 / 155 | 506 ms | can hang on large/congested graphs (11/155 timeouts) |
+| **v3** (default) | v2's placement + a **global negotiated-congestion router** (PathFinder-style) | **155 / 155** | 160 ms | passes the whole battery; leanest layouts (fewest entities/turns) |
+| v2 | deterministic **lane fabric**: 4 fixed passes, no search, no rip-up | 132 / 155 | **30 ms** | fastest; tail = congested fan-in + mixed-lane collectors |
+| v1 | fixed grid + **A\* rip-up** search router | 125 / 155 | 544 ms | can hang on large/congested graphs (11/155 timeouts) |
 
 <sub>\*across `examples/` (49 curated) + `corner_cases/` (106 generated stress cases),
 each run subprocess-isolated with a 10s timeout. \*\*on each generator's own passing set.</sub>
@@ -370,8 +373,10 @@ each run subprocess-isolated with a 10s timeout. \*\*on each generator's own pas
 v3 treats routing the way FPGA place-and-route does (see `docs/INSPIRATION.md`): each
 producer's fan-out is one multi-terminal net with **flexible pins** — the search chooses
 machine faces, taps its own trunk, bridges adjacent machines with a single inserter, or
-merges into another lane bound for the same consumer (collector belts *emerge* under high
-fan-in) — and all nets negotiate for tiles under growing congestion prices instead of
+merges into another lane bound for the same consumer *carrying the same product* (collector
+belts *emerge* under high fan-in; different products keep whole belts to themselves for
+throughput, pairing onto opposite lane sides only when a sink has more products than
+faces) — and all nets negotiate for tiles under growing congestion prices instead of
 claiming them greedily. That closes every tracked v1/v2 failure while producing the leanest
 layouts of the three (fewest entities, 10× fewer belt turns than v2). See
 **[STATUS.md](STATUS.md)** for the full comparative analysis.

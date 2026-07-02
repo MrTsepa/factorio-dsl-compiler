@@ -1,5 +1,5 @@
 # High fan-in N=6: 6 producers merge onto ONE collector belt into a 1x1 output.
-# STATUS (engine bd8a1c6): PASS (verifies)
+# STATUS (engine 95100f1): PASS (verifies)
 
 input iron : iron-plate
 assembler p0 : iron-gear-wheel
