@@ -13,12 +13,14 @@ from __future__ import annotations
 
 from . import layout as _v2
 from . import layout_v1 as _v1
+from . import layout_v3 as _v3
 from .ir import Graph
 from .layout import Layout
 
 GENERATORS = {
     "v1": _v1.compile_graph,   # search router (A* + rip-up); optimal-ish but can blow up on scale
     "v2": _v2.compile_graph,   # deterministic lane fabric; fast and robust, cleaner layouts
+    "v3": _v3.compile_graph,   # global negotiated-congestion router (PathFinder-style)
 }
 DEFAULT = "v2"
 

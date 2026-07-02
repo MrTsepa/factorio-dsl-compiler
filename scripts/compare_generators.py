@@ -1,6 +1,7 @@
 #!/usr/bin/env python
-"""Compare the v1 (search router) and v2 (deterministic lane fabric) generators on the same
-test set: pass rate, quality metrics (area, fill%, belt turns, tunnel crossings), and speed.
+"""Compare the layout generators (v1 search router / v2 lane fabric / v3 global
+negotiated router) on the same test set: pass rate, quality metrics (area, fill%,
+belt turns, tunnel crossings), and speed.
 
 Runs each (file, generator) pair as an isolated subprocess with a timeout, because v1's A*
 rip-up router can hang on large/congested graphs (that's the perf problem v2 was built to fix)
@@ -8,6 +9,7 @@ rip-up router can hang on large/congested graphs (that's the perf problem v2 was
 
     .venv/bin/python scripts/compare_generators.py                  # examples/ (49 cases)
     .venv/bin/python scripts/compare_generators.py --corner-cases    # + corner_cases/ (106 cases)
+    .venv/bin/python scripts/compare_generators.py --generators=v2,v3   # subset head-to-head
     .venv/bin/python scripts/compare_generators.py --json > cmp.json
     .venv/bin/python scripts/compare_generators.py --markdown > cmp.md   # README-ready summary
 """
@@ -21,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "scripts" / "_compare_worker.py"
-GENERATORS = ("v1", "v2")
+GENERATORS = ("v1", "v2", "v3")
 TIMEOUT_S = 20
 
 
@@ -55,9 +57,10 @@ def run(paths: list[Path]) -> list[dict]:
         for gen in GENERATORS:
             row[gen] = _run_one(p, gen)
         rows.append(row)
-        v1s = "ok" if row["v1"].get("ok") else ("TO" if row["v1"].get("timeout") else "FAIL")
-        v2s = "ok" if row["v2"].get("ok") else ("TO" if row["v2"].get("timeout") else "FAIL")
-        print(f"[{i}/{len(paths)}] {rel:40s} v1={v1s:4s} v2={v2s:4s}", file=sys.stderr)
+        marks = " ".join(
+            f"{g}={'ok' if row[g].get('ok') else ('TO' if row[g].get('timeout') else 'FAIL'):4s}"
+            for g in GENERATORS)
+        print(f"[{i}/{len(paths)}] {rel:40s} {marks}", file=sys.stderr)
     return rows
 
 
@@ -79,16 +82,19 @@ def _summary(rows: list[dict]) -> dict:
 
 
 def _print_table(rows: list[dict]) -> None:
-    hdr = f"{'case':40s} {'v1':>8s} {'v2':>8s}  {'v1 ents':>8s} {'v2 ents':>8s}  {'v1 ms':>7s} {'v2 ms':>7s}"
+    hdr = (f"{'case':40s} " + " ".join(f"{g:>8s}" for g in GENERATORS)
+           + "  " + " ".join(f"{g + ' ents':>9s}" for g in GENERATORS)
+           + "  " + " ".join(f"{g + ' ms':>8s}" for g in GENERATORS))
     print(hdr)
     print("-" * len(hdr))
     for r in rows:
-        a, b = r["v1"], r["v2"]
-        av = "ok" if a.get("ok") else ("TIMEOUT" if a.get("timeout") else "FAIL")
-        bv = "ok" if b.get("ok") else ("TIMEOUT" if b.get("timeout") else "FAIL")
-        print(f"{r['case']:40s} {av:>8s} {bv:>8s}  "
-              f"{a.get('ents', '-'):>8} {b.get('ents', '-'):>8}  "
-              f"{a.get('ms', '-'):>7} {b.get('ms', '-'):>7}")
+        cells = [r[g] for g in GENERATORS]
+        marks = " ".join(
+            f"{('ok' if c.get('ok') else ('TIMEOUT' if c.get('timeout') else 'FAIL')):>8s}"
+            for c in cells)
+        ents = " ".join(f"{c.get('ents', '-'):>9}" for c in cells)
+        ms = " ".join(f"{c.get('ms', '-'):>8}" for c in cells)
+        print(f"{r['case']:40s} {marks}  {ents}  {ms}")
     s = _summary(rows)
     print("-" * len(hdr))
     for gen in GENERATORS:
@@ -111,9 +117,13 @@ def _print_markdown(rows: list[dict]) -> None:
 
 
 def main(argv: list[str]) -> int:
+    global GENERATORS
     corner = "--corner-cases" in argv
     as_json = "--json" in argv
     as_md = "--markdown" in argv
+    for a in argv:
+        if a.startswith("--generators="):
+            GENERATORS = tuple(a.split("=", 1)[1].split(","))
     args = [a for a in argv if not a.startswith("--")]
     paths = [ROOT / a for a in args] if args else _default_paths(corner)
 

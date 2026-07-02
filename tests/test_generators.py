@@ -1,4 +1,4 @@
-"""The generator registry (fgr.generators): both v1 and v2 are reachable by name and
+"""The generator registry (fgr.generators): v1, v2 and v3 are reachable by name and
 produce a valid, verifying layout on simple graphs. This is NOT a full v1 regression
 battery -- v1's search router can be slow/hang on large or congested graphs (that's the
 whole reason v2 exists; see scripts/compare_generators.py for the full head-to-head)."""
@@ -32,4 +32,4 @@ def test_each_generator_verifies_a_simple_graph(name):
 
 def test_unknown_generator_name_raises():
     with pytest.raises(ValueError):
-        compile_graph(parse(SIMPLE), "v3")
+        compile_graph(parse(SIMPLE), "v99")
