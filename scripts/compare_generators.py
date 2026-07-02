@@ -24,7 +24,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "scripts" / "_compare_worker.py"
 GENERATORS = ("v1", "v2", "v3")
-TIMEOUT_S = 20
+# A generator either finishes in seconds or has wandered off (v1's A* rip-up can hang
+# for minutes) -- 10s separates the two regimes and keeps the full battery quick.
+TIMEOUT_S = 10
 
 
 def _run_one(path: Path, generator: str) -> dict:

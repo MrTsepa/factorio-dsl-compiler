@@ -1014,13 +1014,21 @@ def _negotiate(ctx: _Ctx, belt_nets, fluid_nets):
         state.commit(routers[nid](ctx, state, n, pres))
 
     best_plans, best_score = None, (1 << 30)
+    stall = 0
     for _round in range(MAX_ROUNDS):
         overused, weld_nets, weld_tiles, orphans, unrouted = _audit(ctx, state)
         score = 3 * len(overused) + 3 * len(weld_tiles) + len(orphans) + 5 * len(unrouted)
         if score < best_score:
-            best_plans, best_score = dict(state.plans), score
+            best_plans, best_score, stall = dict(state.plans), score, 0
+        else:
+            stall += 1
         if score == 0:
             break
+        if stall >= 10:
+            break                    # negotiation has stopped improving for 10 straight
+            #                          rounds; the outer vgap escalation is the better
+            #                          lever at this point (slow convergers DO recover
+            #                          after 6-8 flat rounds -- don't cut earlier)
         for r in overused:
             state.hist[r] = state.hist.get(r, 0) + HIST_INC
         for t in weld_tiles:
