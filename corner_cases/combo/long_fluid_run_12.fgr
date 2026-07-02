@@ -1,5 +1,5 @@
 # Long fluid run: a depth-12 item chain pushes the water consumer far east; pipe must reach across.
-# STATUS (engine 6ed9b79): PASS (verifies)
+# STATUS (engine e3e2314): PASS (verifies)
 
 fluid water : water
 input iron : iron-plate

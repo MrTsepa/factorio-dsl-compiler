@@ -1,5 +1,5 @@
 # Furnace stack N=64: 1 ore belt -> 64 furnaces -> 1 plate merge belt.
-# STATUS (engine 6ed9b79): PASS (verifies)
+# STATUS (engine e3e2314): PASS (verifies)
 
 input ore : iron-ore
 furnace f0 : iron-plate
