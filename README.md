@@ -350,6 +350,31 @@ inserter is dangling, every node is the right machine, and the set of physically
 lanes *exactly* equals the spec — every declared lane present, no extra ones, and no two
 fluids sharing a pipe network.
 
+Because the verifier is generator-agnostic, the layout generator itself is **swappable** —
+two live side by side behind one interface (`fgr.generators`):
+
+| generator | approach | pass rate\* | avg compile\*\* | notes |
+|---|---|---|---|---|
+| **v2** (default) | deterministic **lane fabric**: 4 fixed passes, no search, no rip-up | **138 / 155** | **13 ms** | never times out; the default |
+| v1 | fixed grid + **A\* rip-up** search router | 132 / 155 | 521 ms | can hang on large/congested graphs (10/155 timeouts) |
+
+<sub>\*across `examples/` (49 curated) + `corner_cases/` (106 generated stress cases).
+\*\*on the cases both fully verify — v1's cost is understated, since this excludes its 10
+outright timeouts.</sub>
+
+```bash
+.venv/bin/python -m fgr compile examples/basic/gears.fgr -g v1   # pick a generator explicitly
+.venv/bin/python scripts/compare_generators.py --corner-cases    # full head-to-head, live numbers
+```
+
+v2 is faster, more reliable, and lays straighter belts (fewer needless turns), at the cost of
+somewhat more tiles/entities on complex graphs — it trades some compactness for the placement
+robustness (fluid-machine spacing, adaptive-gap escalation) that lets it route dense fluid
+fields without welding or fragmenting. See **[STATUS.md](STATUS.md)** for the full comparative
+analysis, including a fluid-network bug both generators originally shared (v2 fixed it; v1,
+kept as the historical baseline, still has it) and v2's one remaining tracked failure bucket
+(congested belt risers on very high fan-in).
+
 Because the oracle is only as good as its model of the game, that model is checked against
 ground truth — `fgr validate-model` asserts the inserter/fluid-box/underground geometry
 matches Factorio's real prototype data (via FBSR), and a separate check confirms each
@@ -358,13 +383,15 @@ recipe is actually craftable by its machine. Both auto-skip if FBSR isn't instal
 <details><summary>How the code is organized</summary>
 
 ```
-fgr/                 the package (dsl → ir → layout → verify → blueprint/encode → render)
+fgr/                 the package (dsl → ir → layout(s) → verify → blueprint/encode → render)
 examples/
   basic/             intro factories (gears, circuits, bus, fanout, merge, science)
   complex/           hand-authored realistic builds (furnaces, oil/chem fluids, deep chains)
   stress/            machine-generated complex DAGs — the stress battery
-scripts/             stress_complex (battery) · independent_check (2nd-opinion checker)
-                     · audit_specs (recipe/item/fluid validity) · build_report · gen_gallery
+corner_cases/        standalone failure-hunting corpus (106 cases; not in the gating suite)
+scripts/             compare_generators (v1 vs v2 head-to-head) · stress_complex (battery)
+                     · independent_check (2nd-opinion checker) · audit_specs · build_report
+                     · gen_gallery · refresh_corner_case_status
 tests/               the pytest suite
 docs/                the committed report + gallery images (also served on GitHub Pages)
 ```
@@ -372,7 +399,9 @@ docs/                the committed report + gallery images (also served on GitHu
 | file | role |
 |------|------|
 | `fgr/dsl.py` | parse `.fgr` text → a `Graph` (the spec) |
-| `fgr/layout.py` | a reference generator: place machines, attach inserters, route belts/pipes |
+| `fgr/generators.py` | the registry: `compile_graph(graph, "v1"\|"v2")` — pick a generator by name |
+| `fgr/layout.py` | **v2**, the default generator: deterministic lane-fabric router |
+| `fgr/layout_v1.py` | **v1**, the original fixed-grid + A\* rip-up router (historical baseline) |
 | `fgr/verify.py` | **the** generator-agnostic oracle |
 | `fgr/blueprint.py` + `fgr/encode.py` | `Layout` → Factorio 2.0 blueprint string |
 | `fgr/fbsr_validation.py` | check the model (geometry + recipes) against real Factorio data |
@@ -383,13 +412,15 @@ docs/                the committed report + gallery images (also served on GitHu
 
 It works end-to-end: a high-level graph becomes a real, verified, buildable layout — items
 on belts and fluids on pipes, with undergrounds, inline-tap fan-out/merge (no splitters),
-furnaces, and chemical plants. The generator is the **v2 lane fabric**: four deterministic
-passes (layer → order → place → emit), no search or rip-up, so every case compiles
-instantly and can't give up. `STATUS.md` has the current numbers and the exact failing cases.
+furnaces, and chemical plants. It also demonstrates the premise itself: **two** generators
+(v1's search router, v2's deterministic lane fabric) sit behind the same interface and are
+graded by the same independent oracle — swap the generator, keep the guarantee. `STATUS.md`
+has the full comparative analysis and the current numbers for both.
 
-The honest edges: the deterministic passes route most graphs cleanly, but the dense tail —
-multi-fluid oil/chem chains, very high fan-in, congested reconvergence — isn't fully routed
-yet (it needs fluid-aware placement + collector merges; tracked in `STATUS.md`). And the
-verifier checks *connectivity*, not throughput — that an item *can* reach B, not the rate.
-The architecture keeps the generator and the verifier cleanly separated so each can grow on
-its own — the generator is swappable; the verifier is the oracle.
+The honest edges: v2's four deterministic passes (layer → order → place → emit) route the
+large majority of graphs cleanly and instantly, but very high fan-in into a single machine
+(the "congested belt riser" bucket — a producer trunk ending deep in a packed channel with no
+free path to the consumer) isn't fully routed yet; tracked in `STATUS.md` with what's been
+tried. And the verifier checks *connectivity*, not throughput — that an item *can* reach B,
+not the rate. The architecture keeps the generators and the verifier cleanly separated so
+each can grow on its own — the generator is swappable; the verifier is the oracle.
