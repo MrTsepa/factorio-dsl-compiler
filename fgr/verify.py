@@ -38,9 +38,11 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from .ir import DIR_DELTA, OPPOSITE, Graph, NodeKind
-from .layout import (ASSEMBLER, BELT, CHEMICAL, CHEST_INPUT, CHEST_OUTPUT, FLUID_SOURCE,
-                     FURNACE, INSERTER, PIPE, PIPE_TO_GROUND, PIPE_UG_GAP, SPLITTER, TANK,
-                     UG_MAX_GAP, UNDERGROUND, Layout, PlacedEntity, _fluid_connections)
+from .layout import (ASSEMBLER, BELT, CHEMICAL, CHEST_INPUT, CHEST_OUTPUT, EEI,
+                     FLUID_SOURCE, FURNACE, INSERTER, LOADER, PIPE, PIPE_TO_GROUND,
+                     PIPE_UG_GAP, SPLITTER, SUBSTATION, TANK, UG_MAX_GAP, UNDERGROUND,
+                     Layout, PlacedEntity, _fluid_connections)
+from .power import POWERED
 
 # An output node is a chest for items but a storage-tank when it receives fluid.
 _PROTO_FOR_KIND = {NodeKind.INPUT: CHEST_INPUT, NodeKind.OUTPUT: {CHEST_OUTPUT, TANK},
@@ -98,7 +100,7 @@ def verify(graph: Graph, layout: Layout) -> Report:
         for t in ent.tiles():
             carrier_at[t] = ("body", name)
         body_tiles[name] = ent.tiles()
-    trans_at: dict[tuple[int, int], PlacedEntity] = {}  # belt/splitter/underground tiles
+    trans_at: dict[tuple[int, int], PlacedEntity] = {}  # belt/splitter/ug/loader tiles
     for e in layout.entities:
         if e.proto == BELT:
             carrier_at[(e.x, e.y)] = ("belt", (e.x, e.y))
@@ -111,13 +113,32 @@ def verify(graph: Graph, layout: Layout) -> Report:
             for t in e.tiles():
                 carrier_at[t] = cid
                 trans_at[t] = e
+        elif e.proto == LOADER:                # ONE carrier for the 1x2 entity
+            cid = ("loader", (e.x, e.y))
+            for t in e.tiles():
+                carrier_at[t] = cid
+                trans_at[t] = e
 
     edges_out = _flow_edges(layout, carrier_at, trans_at, bodies, report)
     report.lanes_found = _direct_lanes(graph, bodies, body_tiles, edges_out)
     _compare_to_spec(graph, report)
     _check_lane_mixing(graph, layout, trans_at, bodies, report)
     _check_fluids(graph, layout, bodies, report)
+    _check_power(layout, report)
     return report
+
+
+def _loader_ends(e: PlacedEntity):
+    """(rear_tile, front_tile) of a 1x2 loader along its flow direction. For type
+    "output" the container couples behind the rear; for "input" it couples ahead of
+    the front. The belt half is the rear for "input" (it takes the feed) and the
+    front for "output" (it pushes onward)."""
+    d = e.direction or 0
+    ts = e.tiles()
+    dx, dy = DIR_DELTA[d]
+    front = max(ts, key=lambda t: t[0] * dx + t[1] * dy)
+    rear = ts[0] if ts[1] == front else ts[1]
+    return rear, front
 
 
 def _occupancy(layout: Layout):
@@ -187,6 +208,12 @@ def _flow_edges(layout: Layout, carrier_at: dict, trans_at: dict, bodies: dict, 
             if e.ug_type == "input":
                 return td != OPPOSITE[d]
             return d not in (td, OPPOSITE[td])
+        if e.proto == LOADER:
+            # a loader's belt half takes ONLY a straight feed (no side-loading), and
+            # only when it's an "input" loader (belt -> container); an "output"
+            # loader's rear is the container coupling, nothing feeds it.
+            rear, _front = _loader_ends(e)
+            return e.loader_type == "input" and d == td and target_tile == rear
         return False
 
     def push(src_id, target_tile, d) -> None:
@@ -229,8 +256,27 @@ def _flow_edges(layout: Layout, carrier_at: dict, trans_at: dict, bodies: dict, 
                     edges.setdefault(("ug", (e.x, e.y)), set()).add(("ug", exit_tile))
                 else:
                     dangling.append((e.x, e.y))  # unpaired underground entrance
+        elif e.proto == LOADER:
+            d = e.direction or 0
+            dx, dy = DIR_DELTA[d]
+            rear, front = _loader_ends(e)
+            cid = ("loader", (e.x, e.y))
+            if e.loader_type == "output":      # container (behind rear) -> belt (front)
+                body = carrier_at.get((rear[0] - dx, rear[1] - dy))
+                if body is None or body[0] != "body" or not item_carrier(body):
+                    dangling.append((e.x, e.y))
+                    continue
+                edges.setdefault(body, set()).add(cid)
+                push(cid, (front[0] + dx, front[1] + dy), d)
+            else:                              # belt (into rear) -> container (past front)
+                body = carrier_at.get((front[0] + dx, front[1] + dy))
+                if body is None or body[0] != "body" or not item_carrier(body):
+                    dangling.append((e.x, e.y))
+                    continue
+                edges.setdefault(cid, set()).add(body)
     report.add("no dangling inserters / unpaired undergrounds", not dangling,
-               "" if not dangling else f"empty pickup/drop or unpaired underground at {dangling[:5]}")
+               "" if not dangling else "empty pickup/drop, unpaired underground or "
+               f"uncoupled loader at {dangling[:5]}")
     return edges
 
 
@@ -309,8 +355,8 @@ def _check_lane_mixing(graph: Graph, layout: Layout, trans_at, bodies, report: R
         return (dy, -dx)                          # left of travel, y-down coordinates
 
     def lane_id(ent, tile):
-        # splitter: one logical node (its 2 cells balance freely within a lane)
-        return (ent.x, ent.y) if ent.proto == SPLITTER else tile
+        # splitter/loader: one logical node for the 2-tile entity
+        return (ent.x, ent.y) if ent.proto in (SPLITTER, LOADER) else tile
 
     # belt-connection pushes (they also define each belt's curve state)
     feeders: dict = {}
@@ -321,6 +367,8 @@ def _check_lane_mixing(graph: Graph, layout: Layout, trans_at, bodies, report: R
             cells = [(e.x, e.y)]
         elif e.proto == SPLITTER:
             cells = e.tiles()
+        elif e.proto == LOADER and e.loader_type == "output":
+            cells = [_loader_ends(e)[1]]           # the belt half pushes onward
         d = e.direction or 0
         for c in cells:
             ft = (c[0] + DIR_DELTA[d][0], c[1] + DIR_DELTA[d][1])
@@ -332,7 +380,9 @@ def _check_lane_mixing(graph: Graph, layout: Layout, trans_at, bodies, report: R
                   or (te.proto == SPLITTER and d == td)
                   or (te.proto == UNDERGROUND
                       and (td != OPPOSITE[d] if te.ug_type == "input"
-                           else d not in (td, OPPOSITE[td]))))
+                           else d not in (td, OPPOSITE[td])))
+                  or (te.proto == LOADER and te.loader_type == "input"
+                      and d == td and ft == _loader_ends(te)[0]))
             if ok:
                 pushes.append((e, c, ft, d))
                 if te.proto == BELT:
@@ -391,6 +441,15 @@ def _check_lane_mixing(graph: Graph, layout: Layout, trans_at, bodies, report: R
             work.append((node, lane))
 
     for e in layout.entities:
+        if e.proto == LOADER and e.loader_type == "output":
+            d = e.direction or 0
+            rear, _front = _loader_ends(e)
+            src_body = (rear[0] - DIR_DELTA[d][0], rear[1] - DIR_DELTA[d][1])
+            if src_body in name_at:
+                node = lane_id(e, rear)
+                add(node, "L", {tag_of(name_at[src_body])})
+                add(node, "R", {tag_of(name_at[src_body])})
+            continue
         if e.proto != INSERTER:
             continue
         dx, dy = DIR_DELTA[e.direction]
@@ -556,3 +615,52 @@ def _check_fluids(graph: Graph, layout: Layout, bodies, report: Report) -> None:
     mixed = sorted("+".join(sorted(fl)) for fl in net_fluids.values() if len(fl) > 1)
     report.add("no fluid mixing (one fluid per pipe network)", not mixed,
                "" if not mixed else "contaminated networks: " + ", ".join(mixed))
+
+
+def _check_power(layout: Layout, report: Report) -> None:
+    """Every powered entity must sit in a substation supply area, the substations must
+    form one wire-connected network per consumer, and an EEI on that network must
+    generate the power -- i.e. the blueprint RUNS when pasted into a sandbox world.
+
+    Game rules (vanilla 2.0, geometry cross-checked by fgr.fbsr_validation): substation
+    = 2x2 body, 18x18 supply centred on it, 18-tile wire reach between centres; an
+    entity (consumer or generator alike) connects to the network whose supply area
+    overlaps any of its tiles."""
+    consumers = [e for e in layout.entities if e.proto in POWERED]
+    if not consumers:
+        return
+    subs = [e for e in layout.entities if e.proto == SUBSTATION]
+    eeis = [e for e in layout.entities if e.proto == EEI]
+
+    def covered_by(ent):
+        out = set()
+        for i, s in enumerate(subs):
+            if any(s.x - 8 <= tx <= s.x + 9 and s.y - 8 <= ty <= s.y + 9
+                   for tx, ty in ent.tiles()):
+                out.add(i)
+        return out
+
+    parent = list(range(len(subs)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i in range(len(subs)):
+        for j in range(i + 1, len(subs)):
+            dx, dy = subs[i].x - subs[j].x, subs[i].y - subs[j].y
+            if dx * dx + dy * dy <= 18 * 18:
+                parent[find(i)] = find(j)
+
+    powered_comps = {find(i) for e in eeis for i in covered_by(e)}
+    dark = []
+    for e in consumers:
+        comps = {find(i) for i in covered_by(e)}
+        if not comps & powered_comps:
+            dark.append((e.proto, e.x, e.y))
+    report.add("every powered entity is on a powered network (substations + EEI)",
+               not dark and bool(eeis),
+               "" if (not dark and eeis) else
+               ("no electric-energy-interface placed" if not eeis else
+                f"{len(dark)} unpowered: {dark[:4]}"))

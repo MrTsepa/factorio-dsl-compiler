@@ -108,11 +108,13 @@ def test_merge_is_multi_tap_no_splitter():
 
 
 def test_breaking_an_output_inserter_breaks_its_lane():
-    # rip out a producer's output inserter; its consumer loses the lane.
+    # rip out a producer's chest->belt loader; its consumer loses the lane.
+    # (chest I/O is full-belt loaders since v3 grew power+loader support)
     g, lay = _load("merge.fgr")
+    before = len(lay.entities)
     lay.entities = [e for e in lay.entities
-                    if not (e.proto == INSERTER and e.meta.get("role") == "out"
-                            and e.meta.get("src") == "iron_a")]
+                    if not (e.meta.get("role") == "out" and e.meta.get("src") == "iron_a")]
+    assert len(lay.entities) < before, "expected an output loader/inserter for iron_a"
     report = verify(g, lay)
     assert not report.ok
     assert ("iron_a", "gears") not in report.lanes_found
@@ -142,6 +144,10 @@ def _two_product_layout(separated):
     lay.add(PlacedEntity(CHEST_INPUT, 0, 0, item="iron-plate", meta={"node": "iron"}))
     lay.add(PlacedEntity(CHEST_INPUT, 0, 4, item="copper-plate", meta={"node": "copper"}))
     lay.add(PlacedEntity(CHEST_OUTPUT, 6, 2, meta={"node": "out"}))
+    # a powered fixture: one substation covers everything, one EEI feeds it
+    from fgr.layout import EEI, SUBSTATION
+    lay.add(PlacedEntity(SUBSTATION, 0, 6, meta={}))
+    lay.add(PlacedEntity(EEI, 3, 6, meta={}))
     lay.add(PlacedEntity(BELT, 4, 2, direction=EAST, meta={}))     # shared pick tile
     lay.add(PlacedEntity(INSERTER, 5, 2, direction=WEST, meta={}))  # -> out chest
     # iron: chest -> eastward run -> south down column x=4 into the pick tile

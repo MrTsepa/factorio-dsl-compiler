@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .encode import encode_blueprint_string
 from .layout import (ASSEMBLER, CHEMICAL, CHEST_INPUT, FLUID_SOURCE, INPUT_FILL,
-                     UNDERGROUND, Layout)
+                     LOADER, UNDERGROUND, Layout)
 
 # A Factorio 2.0 version stamp (any recent 2.0 value works; FBSR ignores the patch).
 VERSION = 562949954207746
@@ -23,6 +23,8 @@ def to_blueprint(layout: Layout, label: str = "fgr") -> dict:
             ent["recipe"] = e.recipe
         if e.proto == UNDERGROUND and e.ug_type:
             ent["type"] = e.ug_type  # "input" = entrance, "output" = exit
+        if e.proto == LOADER and e.loader_type:
+            ent["type"] = e.loader_type  # "output" = container->belt, "input" = belt->container
         if e.proto == CHEST_INPUT and e.item:
             ent["infinity_settings"] = {
                 "remove_unfiltered_items": True,

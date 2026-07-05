@@ -35,7 +35,7 @@ def _glyph(e) -> str:
         return "o"
     if p == "long-handed-inserter":
         return _INS[e.direction]
-    if p == "loader-1x1":
+    if p == "loader":
         return "L"
     if p == "substation":
         return "%"

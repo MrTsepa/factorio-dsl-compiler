@@ -462,6 +462,8 @@ def compile_graph(graph: Graph) -> Layout:
         _build_merge(layout, m, merge_src_anchor[m], merge_target[m], merge_dir[m], blocked, jobs)
 
     _route_jobs(layout, jobs, blocked)
+    from .power import add_power
+    add_power(layout)
     return layout
 
 

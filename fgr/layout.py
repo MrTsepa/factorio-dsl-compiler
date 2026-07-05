@@ -39,7 +39,12 @@ SPLITTER = "splitter"
 PIPE = "pipe"
 PIPE_TO_GROUND = "pipe-to-ground"
 TANK = "storage-tank"
-LOADER = "loader-1x1"                     # full-belt I/O (chest <-> belt)
+LOADER = "loader"    # full-belt chest<->belt I/O. The VANILLA hidden 1x2 loader: base
+#                      2.0 defines NO loader-1x1 instances (that's a modded prototype --
+#                      it renders as '?' and would not paste into an unmodded game), so
+#                      the 1x2 it is. One end couples to an adjacent container, the other
+#                      is a belt; `direction` is the item-flow direction and loader_type
+#                      is "output" (container -> belt) or "input" (belt -> container).
 SUBSTATION = "substation"
 EEI = "electric-energy-interface"
 
@@ -48,7 +53,7 @@ INPUT_FILL = 4800  # items an infinity chest maintains
 SIZE = {CHEST_INPUT: (1, 1), CHEST_OUTPUT: (1, 1), ASSEMBLER: (3, 3),
         FURNACE: (3, 3), CHEMICAL: (3, 3), FLUID_SOURCE: (1, 1), TANK: (3, 3),
         INSERTER: (1, 1), LONG_INSERTER: (1, 1), BELT: (1, 1), UNDERGROUND: (1, 1),
-        SPLITTER: (2, 1), PIPE: (1, 1), PIPE_TO_GROUND: (1, 1), LOADER: (1, 1),
+        SPLITTER: (2, 1), PIPE: (1, 1), PIPE_TO_GROUND: (1, 1), LOADER: (1, 2),
         SUBSTATION: (2, 2), EEI: (2, 2)}
 
 # Real fluid-box pipe connections (Factorio data), as (offset-from-centre, out-dir, flow);
@@ -125,6 +130,8 @@ class PlacedEntity:
     def size(self) -> tuple[int, int]:
         if self.proto == SPLITTER:
             return (1, 2) if self.direction in (EAST, WEST) else (2, 1)
+        if self.proto == LOADER:               # 1 wide, 2 long ALONG the flow axis
+            return (2, 1) if self.direction in (EAST, WEST) else (1, 2)
         return SIZE[self.proto]
 
     def tiles(self) -> list[tuple[int, int]]:
@@ -880,6 +887,8 @@ def _compile_at(graph: Graph, vgap: int, fluid_order=None) -> Layout:
 
     occ -= fluid_corridor            # release the kept-clear fluid approaches for the pipe router
     _emit_fluids(graph, layout, bodies, occ, fluid_order)
+    from .power import add_power     # lazy: power imports this module's constants
+    add_power(layout)
     return layout
 
 

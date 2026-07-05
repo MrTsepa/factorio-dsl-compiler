@@ -38,11 +38,13 @@ from dataclasses import dataclass, field
 
 from .ir import (EAST, WEST, NORTH, SOUTH, DIR_DELTA, OPPOSITE, Graph,
                  delta_to_dir)
-from .layout import (BELT, INSERTER, PIPE, PIPE_TO_GROUND, TANK, UNDERGROUND,
+from .layout import (BELT, CHEST_INPUT, CHEST_OUTPUT, INSERTER, LOADER, PIPE,
+                     PIPE_TO_GROUND, TANK, UNDERGROUND,
                      CHEMICAL, FLUID_SOURCE, FLUID_VGAP, PIPE_UG_GAP, SIZE,
                      UG_MAX_GAP, Layout, PlacedEntity,
                      _RECIPE_KINDS, _assign_rows, _fluid_connections, _layers,
                      _node_proto)
+from .power import add_power
 
 CARDINALS = (NORTH, EAST, SOUTH, WEST)
 
@@ -86,12 +88,18 @@ class _Plan:
     ops: dict = field(default_factory=dict)    # tile -> ("belt",dir)|("ug_in",dir)|("ug_out",dir)
     #                                            | ("pipe",)|("p2g",mouth_dir)
     ins: list = field(default_factory=list)    # (tile, dir, meta) inserters (belt nets)
+    loaders: list = field(default_factory=list)  # (face_tile, outward, ltype, meta): 1x2
+    #                                              vanilla loaders on chest faces; tiles =
+    #                                              face and face+outward, belt half outer
     buried: list = field(default_factory=list)  # (axis, tile) buried interior tiles
     sclaims: set = field(default_factory=set)   # surface tiles claimed (ops + inserters)
     lclaims: set = field(default_factory=set)   # ("LB"/"LP", axis, x, y) tunnel-line claims
     parent: dict = field(default_factory=dict)  # tile -> parent tile (belt tree)
     reach: dict = field(default_factory=dict)   # tile -> frozenset(consumers downstream)
     merges: list = field(default_factory=list)  # (host_net, host_tile, my_tile, consumer)
+    lock: set = field(default_factory=set)      # tiles whose belt ORIENTATION is load-
+    #                                             bearing (a loader's straight feed) --
+    #                                             never re-oriented / extended through
     manc: list = field(default_factory=list)    # (merge_record, frozenset(ancestor tiles))
     welds: set = field(default_factory=set)     # (other_net, tile) soft welds accepted
     unrouted: list = field(default_factory=list)
@@ -132,6 +140,14 @@ class _State:
                 self.carrier[t] = (plan.net, PIPE_TO_GROUND, op[1], None)
         for t, d, _m in plan.ins:
             self.carrier[t] = (plan.net, INSERTER, d, None)
+        for f, o, ltype, _m in plan.loaders:
+            g = (f[0] + DIR_DELTA[o][0], f[1] + DIR_DELTA[o][1])
+            d = o if ltype == "output" else OPPOSITE[o]
+            # container half f, belt half g (both claimed); only the belt half acts
+            self.carrier[f] = (plan.net, LOADER, d, (ltype, "container"))
+            self.carrier[g] = (plan.net, LOADER, d, (ltype, "belt"))
+            if ltype == "output":              # belt half pushes onward
+                self._push(g, d, plan.net)
 
     def _push(self, t, d, net):
         dx, dy = DIR_DELTA[d]
@@ -151,6 +167,10 @@ class _State:
         for t, _d, _m in plan.ins:
             if self.carrier.get(t, (None,))[0] == net:
                 del self.carrier[t]
+        for f, o, _lt, _m in plan.loaders:
+            for t in (f, (f[0] + DIR_DELTA[o][0], f[1] + DIR_DELTA[o][1])):
+                if self.carrier.get(t, (None,))[0] == net:
+                    del self.carrier[t]
         for t in list(self.pushers):
             kept = [p for p in self.pushers[t] if p[0] != net]
             if kept:
@@ -337,6 +357,9 @@ def _accepting(state: _State, net, t, flow_dir):
         if ug == "input":
             return d != OPPOSITE[flow_dir]
         return flow_dir not in (d, OPPOSITE[d])
+    if proto == LOADER:
+        # only an INPUT loader's belt half accepts, and only straight (no side-loads)
+        return ug == ("input", "belt") and flow_dir == d
     return False
 
 
@@ -474,31 +497,67 @@ def _dijkstra(ctx: _Ctx, state: _State, net_id, kind, sources, targets, tree_til
 def _try_accept(ctx, state, net_id, kind, tile, din, via, opts, pres, prev, key):
     """Terminal acceptance at `tile`. Returns (extra_cost, resolved_option) or None."""
     path_tiles = None                             # lazy: only walked when an f needs it
+
+    def walk_tiles():
+        nonlocal path_tiles
+        if path_tiles is None:
+            path_tiles = set()
+            k = key
+            while True:
+                a = prev[k]
+                path_tiles.add(k[0])
+                if a[1:2] in (("step",), ("jump",)):
+                    k = a[0]
+                else:
+                    if a[0] == "tap":             # source inserter tile is taken too
+                        path_tiles.add(a[2])
+                    elif a[0] == "root":
+                        path_tiles.add(a[1])
+                    elif a[0] == "lroot":         # source loader tiles
+                        path_tiles.add(a[1])
+                        path_tiles.add((a[1][0] + DIR_DELTA[a[2]][0],
+                                        a[1][1] + DIR_DELTA[a[2]][1]))
+                    break
+        return path_tiles
+
     for opt in opts:
         if kind == "pipe":
             if via == "jump":
                 continue                          # must arrive as a plain surface pipe
             return (0, opt)
+        if opt[0] == "ldrop":                     # ("ldrop", face_tile, outward, pair)
+            _k, f, outward, pair = opt            # 1x2 input loader on (f, f+outward);
+            inward = OPPOSITE[outward]            # its feed belt sits at f+2*outward,
+            #                                       oriented inward (straight into it)
+            if din == outward:
+                continue                          # arriving head-on against the feed
+            if pair:
+                # pair sink: the feed belt must be SIDE-loaded so this product rides
+                # one lane only -- the partner side-loads the other side, and the
+                # loader lifts both lanes into the chest. A straight arrival would
+                # fill both lanes and mix.
+                if din is None or din in (inward, outward):
+                    continue
+            elif via == "jump" and din != inward:
+                continue                          # an exit pushes straight only
+            g = (f[0] + DIR_DELTA[outward][0], f[1] + DIR_DELTA[outward][1])
+            if f in walk_tiles() or g in path_tiles:
+                continue                          # route runs over the loader's tiles
+            pen = sum(pres for _n2, m in _foreign_pushers(state, net_id, tile)
+                      if inward != OPPOSITE[m])
+            extra = (FACE + state.price(("S", f[0], f[1]), net_id, pres)
+                     + state.price(("S", g[0], g[1]), net_id, pres))
+            if via == "jump":
+                extra += UG_LEAF
+            return (extra + pen, ("ldrop", f, outward, inward))
         if opt[0] == "drop":                      # ("drop", face_tile, ins_dir, side?)
             _k, f, ins_dir = opt[:3]
             prefer_side = len(opt) > 3 and opt[3]
-            if path_tiles is None:
-                path_tiles = set()
-                k = key
-                while True:
-                    a = prev[k]
-                    path_tiles.add(k[0])
-                    if a[1:2] in (("step",), ("jump",)):
-                        k = a[0]
-                    else:
-                        if a[0] == "tap":         # source inserter tile is taken too
-                            path_tiles.add(a[2])
-                        elif a[0] == "root":
-                            path_tiles.add(a[1])
-                        break
-            if f in path_tiles:
+            if f in walk_tiles():
                 continue                          # the route itself uses this face tile
             extra = FACE + state.price(("S", f[0], f[1]), net_id, pres)
+            if len(opt) > 4:                      # chest fallback: loaders preferred
+                extra += 120
             if prefer_side:
                 # pair-sink pick tile: the belt must run ALONG the face normal with a
                 # LATERAL side-feed, so the opposite lateral side stays open for the
@@ -579,13 +638,27 @@ def _belt_targets(ctx: _Ctx, state: _State, net_id, tag, consumer, used_faces, o
     targets: dict = {}
     body = ctx.bodies[consumer]
     partner = ctx.pair_partner.get((consumer, tag))
+    chest_sink = body.proto == CHEST_OUTPUT
     for f, outward in _faces(body):
         if ctx.blocked(f) or f in used_faces or f in own_block:
             continue
         pick = (f[0] + DIR_DELTA[outward][0], f[1] + DIR_DELTA[outward][1])
         if ctx.blocked(pick):
             continue
-        targets.setdefault(pick, []).append(("drop", f, outward, partner is not None))
+        if chest_sink and partner is None:
+            # full-belt sink: 1x2 loader on (f, pick), fed straight at pick2. PAIR
+            # sinks (more distinct products than faces) keep inserter terminals: the
+            # pair mechanism needs 1-tile-deep pins; 3-tile loader assemblies around
+            # a 1x1 chest were shown not to converge (and such sinks are inserter-
+            # bound by construction anyway).
+            pick2 = (f[0] + 2 * DIR_DELTA[outward][0], f[1] + 2 * DIR_DELTA[outward][1])
+            if (not ctx.blocked(pick2) and pick not in used_faces
+                    and pick not in own_block):
+                targets.setdefault(pick2, []).append(("ldrop", f, outward, False))
+            targets.setdefault(pick, []).append(
+                ("drop", f, outward, False, "fb"))
+        else:
+            targets.setdefault(pick, []).append(("drop", f, outward, partner is not None))
     want = frozenset((consumer,))
     # tiles already hosting a cross-product pair are FULL (a third feed would land on
     # one of the two occupied lanes)
@@ -612,11 +685,16 @@ def _belt_targets(ctx: _Ctx, state: _State, net_id, tag, consumer, used_faces, o
         elif plan.tag == partner:
             # PAIR: side-load the partner's pick tile from the side OPPOSITE its own
             # feed -- each product collapses onto its own lane (no mixing), and the
-            # partner's inserter lifts both into the sink.
-            for t, d, meta in plan.ins:
-                if meta.get("role") != "in" or meta.get("edge", (None, None))[1] != consumer:
-                    continue
-                P = (t[0] + DIR_DELTA[d][0], t[1] + DIR_DELTA[d][1])
+            # partner's inserter (or full-belt loader) lifts both into the sink.
+            pick_tiles = [(t[0] + DIR_DELTA[d][0], t[1] + DIR_DELTA[d][1])
+                          for t, d, meta in plan.ins
+                          if meta.get("role") == "in"
+                          and meta.get("edge", (None, None))[1] == consumer]
+            pick_tiles += [(f2[0] + 2 * DIR_DELTA[o2][0], f2[1] + 2 * DIR_DELTA[o2][1])
+                           for f2, o2, lt2, meta in plan.loaders
+                           if lt2 == "input"
+                           and meta.get("edge", (None, None))[1] == consumer]
+            for P in pick_tiles:
                 if plan.ops.get(P, ("",))[0] != "belt" or P in locked:
                     continue
                 e = plan.ops[P][1]
@@ -699,21 +777,36 @@ def _route_belt_net(ctx: _Ctx, state: _State, net: _BeltNet, pres):
                      + state.price(("S", v[0], v[1]), net.net, pres) + SURF)
                 sources.append((c, v, None, "drop", ("tap", L, ins, e)))
         leaves = set(tree) - set(parent.values())
-        for L in sorted(leaves - merge_tiles):
+        for L in sorted(leaves - merge_tiles - plan.lock):
             op, d = tree[L]
             if op == "belt":
                 flow_in = _flow_into(parent, tree, L)
                 sources.append((0, L, flow_in if flow_in is not None else d, "ext", ("ext", L)))
         root_cost = ROOT if not tree else NEW_ROOT
+        chest_root = ctx.bodies[net.producer].proto == CHEST_INPUT
         for f, outward in _faces(producer):
             if ctx.blocked(f) or f in used_faces or f in own_block:
                 continue
             drop = (f[0] + DIR_DELTA[outward][0], f[1] + DIR_DELTA[outward][1])
             if ctx.blocked(drop) or drop in own_block:
                 continue
-            c = (root_cost + state.price(("S", f[0], f[1]), net.net, pres)
-                 + state.price(("S", drop[0], drop[1]), net.net, pres) + SURF)
-            sources.append((c, drop, None, "drop", ("root", f, outward)))
+            Sp_f = state.price(("S", f[0], f[1]), net.net, pres)
+            Sp_d = state.price(("S", drop[0], drop[1]), net.net, pres)
+            if chest_root:
+                # full-belt root: a 1x2 loader on tiles (f, drop), pushing onto drop2
+                drop2 = (f[0] + 2 * DIR_DELTA[outward][0], f[1] + 2 * DIR_DELTA[outward][1])
+                if (not ctx.blocked(drop2) and drop2 not in own_block
+                        and drop not in used_faces):
+                    c = (root_cost + Sp_f + Sp_d
+                         + state.price(("S", drop2[0], drop2[1]), net.net, pres) + SURF)
+                    sources.append((c, drop2, None, "drop", ("lroot", f, outward)))
+                # inserter root stays available but heavily priced: a cramped chest
+                # must still route (half-belt beats no belt; the verifier takes both)
+                c = (root_cost + 120 + Sp_f + Sp_d + SURF)
+                sources.append((c, drop, None, "drop", ("root", f, outward)))
+            else:
+                c = root_cost + Sp_f + Sp_d + SURF
+                sources.append((c, drop, None, "drop", ("root", f, outward)))
 
         # A path may step through a tile the chosen source/terminal wants for its
         # inserter (the search has no per-source provenance). Validate post-hoc and
@@ -774,8 +867,14 @@ def _path_ins_clash(res):
         ins_tiles.append(src_action[2])
     elif src_action[0] == "root":
         ins_tiles.append(src_action[1])
+    elif src_action[0] == "lroot":
+        f, o = src_action[1], src_action[2]
+        ins_tiles += [f, (f[0] + DIR_DELTA[o][0], f[1] + DIR_DELTA[o][1])]
     if option[0] == "drop":
         ins_tiles.append(option[1])
+    elif option[0] == "ldrop":
+        f, o = option[1], option[2]
+        ins_tiles += [f, (f[0] + DIR_DELTA[o][0], f[1] + DIR_DELTA[o][1])]
     for t in ins_tiles:
         if t in seen:
             return t
@@ -832,6 +931,17 @@ def _apply_path(ctx, state, plan, tree, parent, attach, used_faces, consumer, re
         tree[start] = ("belt", path[0][2] if path else EAST)
         plan.sclaims.add(start)
         parent[start] = None
+    elif src_action[0] == "lroot":                # 1x2 output loader on (f, f+outward)
+        _r, f, outward = src_action
+        g = (f[0] + DIR_DELTA[outward][0], f[1] + DIR_DELTA[outward][1])
+        plan.loaders.append((f, outward, "output", {"role": "out", "src": net.producer}))
+        plan.sclaims.add(f)
+        plan.sclaims.add(g)
+        used_faces.add(f)
+        used_faces.add(g)
+        tree[start] = ("belt", path[0][2] if path else outward)
+        plan.sclaims.add(start)
+        parent[start] = None
     elif src_action[0] == "tap":
         _t, L, ins, e = src_action
         plan.ins.append((ins, OPPOSITE[e], {"role": "tap",
@@ -866,7 +976,20 @@ def _apply_path(ctx, state, plan, tree, parent, attach, used_faces, consumer, re
         parent[t] = pt
         pt = t
     # terminal option
-    if option[0] == "drop":
+    if option[0] == "ldrop":                      # 1x2 input loader on (f, f+outward)
+        _d, f, outward, inward = option
+        g = (f[0] + DIR_DELTA[outward][0], f[1] + DIR_DELTA[outward][1])
+        if end in tree and tree[end][0] == "belt":
+            tree[end] = ("belt", inward)
+        plan.loaders.append((f, outward, "input",
+                             {"role": "in", "edge": (net.producer, consumer)}))
+        plan.sclaims.add(f)
+        plan.sclaims.add(g)
+        used_faces.add(f)
+        used_faces.add(g)
+        plan.lock.add(end)                        # the straight feed must stay straight
+        attach.append((consumer, end))
+    elif option[0] == "drop":
         _d, f, ins_dir, leaf = option
         if end in tree and tree[end][0] == "belt":
             tree[end] = ("belt", leaf)
@@ -1064,6 +1187,15 @@ def _audit(ctx: _Ctx, state: _State):
                     if takes and (n2, nid, t) not in sanctioned_push:
                         weld_nets.update((nid, n2))
                         weld_tiles.add(t)
+            for f, o, ltype, _m in plan.loaders:
+                if ltype != "input":
+                    continue                       # an output loader's rear is the chest
+                g = (f[0] + DIR_DELTA[o][0], f[1] + DIR_DELTA[o][1])
+                d = OPPOSITE[o]                    # its belt half takes a straight feed
+                for n2, m in _foreign_pushers(state, nid, g):
+                    if m == d and (n2, nid, g) not in sanctioned_push:
+                        weld_nets.update((nid, n2))
+                        weld_tiles.add(g)
         else:
             for t, op in plan.ops.items():
                 if op[0] == "pipe":
@@ -1237,6 +1369,14 @@ def _emit(layout: Layout, plans: dict):
             meta = dict(meta)
             meta["net"] = nid
             layout.add(PlacedEntity(INSERTER, t[0], t[1], direction=d, meta=meta))
+        for f, o, ltype, meta in plan.loaders:
+            g = (f[0] + DIR_DELTA[o][0], f[1] + DIR_DELTA[o][1])
+            tl = (min(f[0], g[0]), min(f[1], g[1]))
+            meta = dict(meta)
+            meta["net"] = nid
+            layout.add(PlacedEntity(LOADER, tl[0], tl[1],
+                                    direction=o if ltype == "output" else OPPOSITE[o],
+                                    loader_type=ltype, meta=meta))
     return layout
 
 
@@ -1245,7 +1385,9 @@ def _compile_at(graph: Graph, vgap: int) -> Layout:
     ctx = _Ctx(graph, bodies, fluid_sinks)
     belt_nets, fluid_nets = _build_nets(graph, bodies)
     plans = _negotiate(ctx, belt_nets, fluid_nets)
-    return _emit(layout, plans)
+    _emit(layout, plans)
+    add_power(layout)
+    return layout
 
 
 def compile_graph(graph: Graph, vgap: int | None = None) -> Layout:
