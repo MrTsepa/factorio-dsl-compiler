@@ -44,7 +44,7 @@ from .layout import (BELT, CHEST_INPUT, CHEST_OUTPUT, INSERTER, LOADER, PIPE,
                      UG_MAX_GAP, Layout, PlacedEntity,
                      _RECIPE_KINDS, _assign_rows, _fluid_connections, _layers,
                      _node_proto)
-from .power import add_power
+from .power import emit_power, plan_power, power_tiles
 
 CARDINALS = (NORTH, EAST, SOUTH, WEST)
 
@@ -302,6 +302,7 @@ class _Ctx:
         for e in graph.edges:
             if not e.fluid:
                 by_dst.setdefault(e.dst, set()).add(_fluid_tag(graph, e.src))
+        self.n_products = {c: len(tags) for c, tags in by_dst.items()}
         for c, tags in by_dst.items():
             faces = 2 * sum(SIZE[_node_proto(graph, c, fluid_sinks)])
             if len(tags) <= faces:
@@ -645,12 +646,12 @@ def _belt_targets(ctx: _Ctx, state: _State, net_id, tag, consumer, used_faces, o
         pick = (f[0] + DIR_DELTA[outward][0], f[1] + DIR_DELTA[outward][1])
         if ctx.blocked(pick):
             continue
-        if chest_sink and partner is None:
+        if chest_sink and partner is None and ctx.n_products.get(consumer, 1) <= 2:
             # full-belt sink: 1x2 loader on (f, pick), fed straight at pick2. PAIR
-            # sinks (more distinct products than faces) keep inserter terminals: the
-            # pair mechanism needs 1-tile-deep pins; 3-tile loader assemblies around
-            # a 1x1 chest were shown not to converge (and such sinks are inserter-
-            # bound by construction anyway).
+            # sinks and 3+-product chests keep inserter terminals: several 3-tile-deep
+            # loader assemblies crowding one 1x1 chest were shown not to converge, and
+            # a chest splitting its intake across many products is not a full-belt
+            # endpoint anyway -- loaders are for the dedicated-output case.
             pick2 = (f[0] + 2 * DIR_DELTA[outward][0], f[1] + 2 * DIR_DELTA[outward][1])
             if (not ctx.blocked(pick2) and pick not in used_faces
                     and pick not in own_block):
@@ -1157,7 +1158,13 @@ def _route_fluid_net(ctx: _Ctx, state: _State, net: _FluidNet, pres):
 def _audit(ctx: _Ctx, state: _State):
     overused = {r for r, s in state.res.items() if len(s) > 1}
     weld_nets: set = set()
+    weld_pairs: set = set()                        # (net_a, net_b) sorted per weld
     weld_tiles: set = set()
+
+    def _weld(a, b, t):
+        weld_nets.update((a, b))
+        weld_pairs.add((min(a, b), max(a, b)))
+        weld_tiles.add(t)
     # sanctioned feeds: a client's merge push into its host tile is the merge itself
     sanctioned_push = {(nid, host, H) for nid in state.plans
                        for host, H, _mt, _c in state.plans[nid].merges}
@@ -1175,8 +1182,7 @@ def _audit(ctx: _Ctx, state: _State):
                     if (front not in plan.ops and c is not None and c[0] != nid
                             and _accepting(state, nid, front, d)
                             and (c[0], front) not in sanctioned):
-                        weld_nets.update((nid, c[0]))
-                        weld_tiles.add(front)
+                        _weld(nid, c[0], front)
                 # incoming foreign feeds this tile would take: belts and BOTH
                 # underground ends accept side-loads in-game (belt-half of the tile)
                 for n2, m in _foreign_pushers(state, nid, t):
@@ -1185,8 +1191,7 @@ def _audit(ctx: _Ctx, state: _State):
                     else:                          # belt / ug_in: back + sides
                         takes = d != OPPOSITE[m]
                     if takes and (n2, nid, t) not in sanctioned_push:
-                        weld_nets.update((nid, n2))
-                        weld_tiles.add(t)
+                        _weld(nid, n2, t)
             for f, o, ltype, _m in plan.loaders:
                 if ltype != "input":
                     continue                       # an output loader's rear is the chest
@@ -1194,14 +1199,12 @@ def _audit(ctx: _Ctx, state: _State):
                 d = OPPOSITE[o]                    # its belt half takes a straight feed
                 for n2, m in _foreign_pushers(state, nid, g):
                     if m == d and (n2, nid, g) not in sanctioned_push:
-                        weld_nets.update((nid, n2))
-                        weld_tiles.add(g)
+                        _weld(nid, n2, g)
         else:
             for t, op in plan.ops.items():
                 if op[0] == "pipe":
                     for n2, nb in _pipe_weld(state, nid, t):
-                        weld_nets.update((nid, n2))
-                        weld_tiles.add(nb)
+                        _weld(nid, n2, nb)
                 else:                             # p2g: mouth side only
                     mouth = op[1]
                     nb = (t[0] + DIR_DELTA[mouth][0], t[1] + DIR_DELTA[mouth][1])
@@ -1210,8 +1213,7 @@ def _audit(ctx: _Ctx, state: _State):
                     c = state.carrier.get(nb)
                     if c is not None and c[0] != nid and c[1] in (PIPE, PIPE_TO_GROUND):
                         if c[1] == PIPE or state.carrier[nb][2] == OPPOSITE[mouth]:
-                            weld_nets.update((nid, c[0]))
-                            weld_tiles.add(nb)
+                            _weld(nid, c[0], nb)
     orphans: set = set()
     for nid in state.plans:
         for host, H, _mt, consumer in state.plans[nid].merges:
@@ -1232,7 +1234,7 @@ def _audit(ctx: _Ctx, state: _State):
                         or feeds[0] in (e, OPPOSITE[e])):
                     orphans.add(nid)
     unrouted = {nid for nid in state.plans if state.plans[nid].unrouted}
-    return overused, weld_nets, weld_tiles, orphans, unrouted
+    return overused, weld_nets, weld_pairs, weld_tiles, orphans, unrouted
 
 
 # ---------------------------------------------------------------------------
@@ -1251,7 +1253,7 @@ def _negotiate(ctx: _Ctx, belt_nets, fluid_nets):
     best_plans, best_score = None, (1 << 30)
     stall = 0
     for _round in range(MAX_ROUNDS):
-        overused, weld_nets, weld_tiles, orphans, unrouted = _audit(ctx, state)
+        overused, weld_nets, weld_pairs, weld_tiles, orphans, unrouted = _audit(ctx, state)
         score = 3 * len(overused) + 3 * len(weld_tiles) + len(orphans) + 5 * len(unrouted)
         if score < best_score:
             best_plans, best_score, stall = dict(state.plans), score, 0
@@ -1272,7 +1274,12 @@ def _negotiate(ctx: _Ctx, belt_nets, fluid_nets):
         dirty = set()
         for r in overused:
             dirty |= state.res.get(r, set())
-        dirty |= weld_nets | orphans | unrouted
+        # welds: rip only ONE side per round, alternating -- ripping both together
+        # re-collides them blind (the partner's geometry vanishes just when the
+        # first net re-routes), a deterministic livelock
+        for a, b in weld_pairs:
+            dirty.add(a if _round % 2 == 0 else b)
+        dirty |= orphans | unrouted
         # an unrouted terminal alone leaves nothing else dirty -- the field never
         # changes and the net stays stuck. Charge history around the failed
         # consumer's faces and rip whoever holds that approach ring.
@@ -1307,7 +1314,7 @@ def _negotiate(ctx: _Ctx, belt_nets, fluid_nets):
             if nid in dirty:
                 state.commit(routers[nid](ctx, state, n, pres))
     else:
-        overused, weld_nets, weld_tiles, orphans, unrouted = _audit(ctx, state)
+        overused, weld_nets, weld_pairs, weld_tiles, orphans, unrouted = _audit(ctx, state)
         score = 3 * len(overused) + 3 * len(weld_tiles) + len(orphans) + 5 * len(unrouted)
         if score < best_score:
             best_plans, best_score = dict(state.plans), score
@@ -1383,10 +1390,24 @@ def _emit(layout: Layout, plans: dict):
 def _compile_at(graph: Graph, vgap: int) -> Layout:
     layout, bodies, fluid_sinks = _place(graph, vgap)
     ctx = _Ctx(graph, bodies, fluid_sinks)
+    # PLAN POWER BEFORE ROUTING: substations + EEI claim their 2x2s while the ground
+    # is still open (post-routing, dense fields have no free 2x2 left), and their
+    # tiles become router walls -- belts/pipes go around or dive under them. Chest
+    # perimeters (3 deep: face + loader body + feed) are precious I/O ground a chest
+    # cannot spare -- a substation on a face once starved a 4-product sink -- so the
+    # planner treats them as occupied and snaps elsewhere.
+    halo: set = set()
+    for n, b in bodies.items():
+        if b.proto in (CHEST_INPUT, CHEST_OUTPUT):
+            for f, o in _faces(b):
+                for k in range(3):
+                    halo.add((f[0] + k * DIR_DELTA[o][0], f[1] + k * DIR_DELTA[o][1]))
+    pplan = plan_power(ctx.walls | halo)
+    ctx.walls |= power_tiles(pplan)
     belt_nets, fluid_nets = _build_nets(graph, bodies)
     plans = _negotiate(ctx, belt_nets, fluid_nets)
     _emit(layout, plans)
-    add_power(layout)
+    emit_power(layout, pplan)
     return layout
 
 

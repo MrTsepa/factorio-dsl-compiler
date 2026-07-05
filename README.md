@@ -352,7 +352,10 @@ fluids sharing a pipe network — and no two products share a belt **side**: a b
 lanes, and the checker tracks real lane physics (side-loads collapse onto the near lane,
 curves preserve lanes, underground ends take side-loads with their hood filtering one
 feeder lane, inserters drop on the far lane), so two products may share a belt only when
-properly lane-separated.
+properly lane-separated. Since v3 grew a **power overlay**, a pass also means the grid is
+live: substations cover every machine and inserter, wire-connected to an
+electric-energy-interface — paste the blueprint into a sandbox world and it **runs**,
+with infinity chests feeding **full belts** through vanilla loaders at both ends.
 
 Because the verifier is generator-agnostic, the layout generator itself is **swappable** —
 three live side by side behind one interface (`fgr.generators`):

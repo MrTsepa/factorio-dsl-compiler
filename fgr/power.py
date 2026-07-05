@@ -11,10 +11,11 @@ Geometry (vanilla 2.0, cross-checked by fgr.fbsr_validation): substation 2x2 bod
 powered if ANY of its tiles overlaps a supply area; a generator (the EEI) feeds a
 network under the same rule.
 
-Deterministic and non-fatal by design: a lattice pitched at 16 (2 tiles of overlap
-slack) is snapped to free ground, gaps are patched per-entity, disconnected islands get
-relay substations, and anything that still can't be placed is simply left for the
-verifier to report -- the overlay never raises.
+Deterministic and non-fatal by design. The reliable path (v3) PLANS the lattice before
+routing -- plan_power() against machine-only occupancy, its tiles become router walls,
+emit_power() materialises after routing. The legacy path (v1/v2) overlays post-routing
+via add_power(), which can strand entities on dense layouts; either way nothing raises,
+the verifier grades the result.
 """
 
 from __future__ import annotations
@@ -38,28 +39,24 @@ def _supply_covers(s, tiles):
     return any(sx - 8 <= tx <= sx + 9 and sy - 8 <= ty <= sy + 9 for tx, ty in tiles)
 
 
-def _spots_covering(tiles):
-    """All substation top-lefts whose supply would cover at least one of `tiles`."""
-    out = set()
-    for tx, ty in tiles:
-        for sx in range(tx - 9, tx + 9):
-            for sy in range(ty - 9, ty + 9):
-                out.add((sx, sy))
-    return out
-
-
 def _wired(a, b):
     """Two substations (top-lefts) connect iff centre distance <= wire reach."""
     dx, dy = a[0] - b[0], a[1] - b[1]
     return dx * dx + dy * dy <= SUBSTATION_WIRE * SUBSTATION_WIRE
 
 
-def add_power(layout: Layout) -> None:
-    """Place substations + one EEI so the layout is fully powered. Mutates `layout`."""
-    consumers = [e for e in layout.entities if e.proto in POWERED]
-    if not consumers:
-        return
-    occ = {t for e in layout.entities for t in e.tiles()}
+def plan_power(occ: set) -> list:
+    """PRE-ROUTING power plan: substation top-lefts + one EEI spot, chosen against the
+    machine-only occupancy `occ` (bodies + reserved fluid-box tiles) so the ground is
+    still open. The caller must treat every returned tile as a WALL for the routers --
+    belts/pipes go around or dive under (game entities never block underground runs).
+    Planning before routing is what makes dense fields work: after routing, dense
+    layouts have no free 2x2 left, and a post-hoc overlay strands entire regions.
+
+    Returns [("sub", (x, y)), ..., ("eei", (x, y))]."""
+    if not occ:
+        return []
+    occ = set(occ)
 
     def free(s):
         sx, sy = s
@@ -67,15 +64,6 @@ def add_power(layout: Layout) -> None:
 
     def claim(s):
         occ.update(((s[0], s[1]), (s[0] + 1, s[1]), (s[0], s[1] + 1), (s[0] + 1, s[1] + 1)))
-
-    subs: list[tuple[int, int]] = []
-
-    # 1) lattice over the build's bbox, each point snapped to nearby free ground and
-    #    kept only if it covers something (no substations over empty plains).
-    xs = [t[0] for t in occ]
-    ys = [t[1] for t in occ]
-    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
-    ctiles = [tuple(e.tiles()) for e in consumers]
 
     def snap(px, py):
         cand = [(px + dx, py + dy) for dx in range(-SNAP, SNAP + 1)
@@ -86,43 +74,56 @@ def add_power(layout: Layout) -> None:
                 return s
         return None
 
-    gy = y0
+    xs = [t[0] for t in occ]
+    ys = [t[1] for t in occ]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+
+    # full lattice, margined past the bbox: routing may wander ~12 tiles beyond the
+    # machines (router bounds), and a tap inserter out there needs power too
+    subs: list[tuple[int, int]] = []
+    gy = y0 - 6
     while gy <= y1 + 8:
-        gx = x0
+        gx = x0 - 6
         while gx <= x1 + 8:
             s = snap(gx, gy)
-            if s is not None and any(_supply_covers(s, ts) for ts in ctiles):
+            if s is not None:
                 subs.append(s)
                 claim(s)
             gx += PITCH
         gy += PITCH
-
-    # 2) patch pass: cover anything the snapped lattice missed. Candidates prefer the
-    #    spot covering the most still-uncovered entities, then nearness to the network.
-    uncovered = [ts for ts in ctiles if not any(_supply_covers(s, ts) for s in subs)]
-    while uncovered:
-        target = uncovered[0]
-        best = None
-        for s in sorted(_spots_covering(target)):
-            if not free(s):
-                continue
-            ncov = sum(1 for ts in uncovered if _supply_covers(s, ts))
-            dnet = min((abs(s[0] - o[0]) + abs(s[1] - o[1]) for o in subs), default=0)
-            key = (-ncov, dnet, s)
-            if best is None or key < best[0]:
-                best = (key, s)
-        if best is None:
-            uncovered.pop(0)               # nothing can cover it; verifier will say so
-            continue
-        subs.append(best[1])
-        claim(best[1])
-        uncovered = [ts for ts in uncovered if not _supply_covers(best[1], ts)]
-
     if not subs:
-        return
+        return []
+    plan = _bridge(subs, free, claim)
 
-    # 3) connectivity: bridge wire-disconnected islands with relay substations placed
-    #    along the line between the closest cross-component pair.
+    # the EEI: a free 2x2 in the first substation's supply area, nearest it
+    s0 = plan[0]
+    cand = [(s0[0] + dx, s0[1] + dy) for dx in range(-8, 9) for dy in range(-8, 9)]
+    cand.sort(key=lambda t: (abs(t[0] - s0[0]) + abs(t[1] - s0[1]), t))
+    out = [("sub", s) for s in plan]
+    for t in cand:
+        if free(t) and _supply_covers(s0, ((t[0], t[1]), (t[0] + 1, t[1] + 1))):
+            out.append(("eei", t))
+            break
+    return out
+
+
+def power_tiles(plan) -> set:
+    """All tiles reserved by a plan_power() result (2x2 per entity)."""
+    return {(x + dx, y + dy) for _k, (x, y) in plan for dx in (0, 1) for dy in (0, 1)}
+
+
+def emit_power(layout: Layout, plan) -> None:
+    """Materialise a plan_power() result into the layout."""
+    for kind, (x, y) in plan:
+        layout.add(PlacedEntity(SUBSTATION if kind == "sub" else EEI, x, y,
+                                meta={"role": "power"}))
+
+
+def _bridge(subs, free, claim):
+
+    # bridge wire-disconnected islands with relay substations placed along the line
+    # between the closest cross-component pair (snap can stretch a 16-pitch gap past
+    # the 18 wire reach).
     def components():
         comp = {i: i for i in range(len(subs))}
 
@@ -162,21 +163,14 @@ def add_power(layout: Layout) -> None:
             break                            # can't bridge; verifier will report it
         subs.append(relay)
         claim(relay)
+    return subs
 
-    # 4) the EEI: a free 2x2 inside some substation's supply area, nearest that
-    #    substation (generators connect by supply-area overlap, same as consumers).
-    eei = None
-    for s in subs:
-        cand = [(s[0] + dx, s[1] + dy) for dx in range(-8, 9) for dy in range(-8, 9)]
-        cand.sort(key=lambda t: (abs(t[0] - s[0]) + abs(t[1] - s[1]), t))
-        for t in cand:
-            if free(t) and _supply_covers(s, ((t[0], t[1]), (t[0] + 1, t[1] + 1))):
-                eei = t
-                break
-        if eei is not None:
-            break
 
-    for s in subs:
-        layout.add(PlacedEntity(SUBSTATION, s[0], s[1], meta={"role": "power"}))
-    if eei is not None:
-        layout.add(PlacedEntity(EEI, eei[0], eei[1], meta={"role": "power"}))
+def add_power(layout: Layout) -> None:
+    """POST-ROUTING fallback overlay (used by the legacy v1/v2 generators): plan
+    against whatever ground routing left and emit immediately. Dense layouts may not
+    leave enough 2x2 ground -- v3 plans BEFORE routing instead (the reliable path)."""
+    if not any(e.proto in POWERED for e in layout.entities):
+        return
+    plan = plan_power({t for e in layout.entities for t in e.tiles()})
+    emit_power(layout, plan)

@@ -23,7 +23,8 @@ default.**
 
 A "pass" means the layout was *independently graded* by `fgr/verify.py` as physically
 realising the spec: every declared belt/pipe lane connects, nothing spurious, no overlaps,
-fluids isolated and attached at real fluid-box tiles, and **no item mixing on a belt lane**
+fluids isolated and attached at real fluid-box tiles, **full power** (see below), and
+**no item mixing on a belt lane**
 — a belt has two sides, so it may carry at most two products, one per side (side-loading
 keeps them separable; two products on ONE side jam in-game). Underground belt ends count
 as side-loadable — their belt half takes side input in-game, with the hood blocking one
@@ -111,16 +112,25 @@ negotiation instead.
 
 ### What a "pass" does and doesn't cover
 
-The oracle grades **physical material-flow topology**: placement (no overlaps), node↔machine
-correspondence, every declared belt/pipe lane connected, no spurious lanes, fluids isolated
-and attached at real boxes. Out of its scope (by design, tracked):
+The oracle grades **physical material-flow topology plus power**: placement (no overlaps),
+node↔machine correspondence, every declared belt/pipe lane connected, no spurious lanes,
+fluids isolated and attached at real boxes, per-lane item purity, and **a live power grid**
+— every powered entity must sit in a substation supply area wire-connected to an
+electric-energy-interface (the vanilla creative generator), so a pasted blueprint *runs*
+in a sandbox world with zero manual fixes. Chest I/O is **full-belt**: infinity chests
+feed belts through vanilla (hidden) 1×2 loaders and output chests swallow full belts the
+same way — both lanes, no inserter bottleneck at the endpoints.
 
-- **Power** — substations + an electric-energy-interface are specified in `docs/V2_DESIGN.md`
-  but not yet placed; in-game the machines would need power.
+Still out of scope (by design, tracked):
+
 - **Recipe↔machine category** (e.g. a chemistry recipe on an assembler) — checked by
   `fgr/fbsr_validation.py` against real Factorio data, deliberately kept out of the pure
   oracle (which holds no hard-coded recipe table).
-- **Throughput** — connectivity only: that an item *can* reach a machine, not the rate.
+- **Throughput** — connectivity only: that an item *can* reach a machine, not the rate
+  (though endpoints and product-pure whole belts remove the two biggest chokepoints).
+- **Rendering of electric poles** — this FBSR build silently draws no poles (all four
+  vanilla types); the blueprint carries them and the verifier grades them, so the gallery
+  images simply don't show the grid.
 
 ## Where it can still fail (v3's honest edges)
 

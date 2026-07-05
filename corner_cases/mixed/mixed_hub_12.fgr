@@ -1,5 +1,5 @@
 # Mixed hub N=12: hub takes a fluid (water) AND fans an item belt to 12 consumers.
-# STATUS (engine 42f8714): PASS (verifies)
+# STATUS (engine baa69ac): PASS (verifies)
 
 input iron : iron-plate
 input cu : copper-plate

@@ -1,5 +1,5 @@
 # Butterfly N=5: 5 producers each fan to all 5 consumers (25 lanes) -> out.
-# STATUS (engine 42f8714): PASS (verifies)
+# STATUS (engine baa69ac): PASS (verifies)
 
 input iron : iron-plate
 assembler p0 : copper-cable
