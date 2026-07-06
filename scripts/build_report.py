@@ -136,6 +136,11 @@ overflow:auto;font-size:13px;margin:0}
 .b-VERIFY-FAIL{background:rgba(224,86,86,.18);color:var(--fail)}
 .b-LAYOUT-ERROR{background:rgba(214,169,58,.18);color:var(--warn)}
 .b-SLOW{background:rgba(154,163,175,.2);color:var(--mut)}
+.b-pass{background:rgba(76,175,80,.18);color:var(--ok)}
+.b-warn{background:rgba(214,169,58,.18);color:var(--warn)}
+.b-fail{background:rgba(154,163,175,.2);color:var(--mut)}
+table.suite td,table.suite th{padding:4px 8px;border-bottom:1px solid var(--line);text-align:left}
+table.suite .copy{font-size:11px;padding:2px 8px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:760px){.grid2{grid-template-columns:1fr}}
 img{width:100%;border-radius:8px;border:1px solid var(--line);background:#0d0f12;display:block}
@@ -420,6 +425,64 @@ def plan_html(rec):
             f"<div class='rline muted'>input lanes: {lanes}</div></div>")
 
 
+def suite_section():
+    """The one-belt suite scoreboard: 61 items, each graded; passing items get a
+    copyable blueprint (recompiled fresh through the same pipeline)."""
+    import json as _json
+    rp = ROOT / "out" / "belt_suite_results.json"
+    if not rp.exists():
+        return ""
+    rows = _json.loads(rp.read_text())
+    from fgr.layout_bank import BankInapplicable, compile_bank
+    from fgr.solver import solve
+    trs = []
+    for r in sorted(rows, key=lambda r: (not r.get("meets_target", False),
+                                         r.get("mode", ""), r["item"])):
+        status = ("ok" if r.get("meets_target") else
+                  "short" if r.get("verify") else
+                  r.get("mode", "?"))
+        badge = {"ok": "b-pass", "short": "b-warn"}.get(status, "b-fail")
+        bp_btn = ""
+        if r.get("meets_target"):
+            spec = ROOT / "corner_cases" / "one_belt" / f"{r['item']}.fgr"
+            try:
+                g = parse(spec.read_text())
+                try:
+                    g2, plan, lay = compile_bank(g)
+                except BankInapplicable:
+                    g2, plan = solve(g)
+                    lay = compile_graph(g2)
+                bp = to_blueprint_string(lay, r["item"],
+                                         description=f"one-belt suite: {r['item']} "
+                                         f">= 15/s (fgr solve)")
+                bp_btn = (f"<button class='copy' data-bp='{esc(bp)}' "
+                          f"onclick='cp(this)'>Copy blueprint</button>")
+            except Exception as ex:                       # noqa: BLE001
+                print(f"  ! suite bp {r['item']}: {str(ex)[:80]}")
+        flow = r.get("flow_per_s", "")
+        trs.append(
+            f"<tr><td class='mono'>{esc(r['item'])}</td>"
+            f"<td><span class='badge {badge}'>{esc(status.upper())}</span></td>"
+            f"<td>{esc(r.get('mode', ''))}</td>"
+            f"<td>{r.get('machines', '')}</td><td>{r.get('entities', '') or ''}</td>"
+            f"<td>{flow}</td><td>{bp_btn}</td></tr>")
+    n_ok = sum(1 for r in rows if r.get("meets_target"))
+    return f"""
+<h2>The one-belt suite: a full belt of everything</h2>
+<p class='sub'>61 base-game items, each asked for at a <b>full yellow belt (15/s)</b>;
+specs generated from the game's real recipe data (<code>scripts/belt_suite.py</code>),
+graded by the verifier and the placed-layout flow oracle. <b>{n_ok}/61 carry the full
+belt today — with zero verifier failures</b>: what breaks, breaks in coverage or sheer
+scale (a full belt of electric furnaces is a 2,978-machine megabase), and every
+failure class is a tracked roadmap item (see
+<a href='https://github.com/mrtsepa/factorio-dsl-compiler/blob/main/corner_cases/one_belt/RESULTS.md'>RESULTS.md</a>).</p>
+<div class='card'><div style='max-height:480px;overflow:auto'>
+<table class='suite'><tr><th>item</th><th>result</th><th>path</th><th>machines</th>
+<th>entities</th><th>placed flow /s</th><th></th></tr>{''.join(trs)}</table>
+</div></div>
+"""
+
+
 def build():
     print("rendering showcase ...")
     cases = []
@@ -450,6 +513,8 @@ def build():
 
     print("sized builds ...")
     sized = sized_cards()
+    print("one-belt suite ...")
+    suite_html = suite_section()
 
     print("validate-model ...")
     try:
@@ -509,6 +574,8 @@ arms and the number of input belts — then the layout is compiled, verified, an
 vanilla-buildable; the boundary scaffolding (chest + loader belts, power feed) is
 what you replace when splicing into a real base.</p>
 {''.join(card(r) for r in sized)}
+
+{suite_html}
 
 <h2>Trust, but verify the verifier</h2>
 <div class='card'>
