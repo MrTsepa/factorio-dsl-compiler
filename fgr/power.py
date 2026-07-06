@@ -150,7 +150,14 @@ def plan_power(occ: set, cover: set | None = None,
                 gain[i] = gain.get(i, 0) + 1
         if not gain:
             break                              # leftovers have no reachable candidate
-        i = max(gain, key=lambda i: (gain[i], -cand[i][1], -cand[i][0]))
+
+        def spread(i):
+            # among equal-coverage spots, stand APART from already-picked substations
+            # (a tie once landed each new sub directly beside the previous one)
+            if not subs:
+                return 0
+            return min(abs(cand[i][0] - o[0]) + abs(cand[i][1] - o[1]) for o in subs)
+        i = max(gain, key=lambda i: (gain[i], spread(i), -cand[i][1], -cand[i][0]))
         alive[i] = False
         best = cand[i]
         if not free(best):                     # an earlier claim took this ground
@@ -233,9 +240,12 @@ def _bridge(subs, free, claim):
                 for dy in range(-8, 9)]
         cand.sort(key=lambda s: (abs(s[0] - ideal[0]) + abs(s[1] - ideal[1]), s))
         ok_a = [s for s in cand if free(s) and _wired(subs[a], s)]
-        relay = next((s for s in ok_a if _wired(s, subs[b])), None)  # one-hop finish
-        if relay is None:
-            relay = ok_a[0] if ok_a else None    # step toward b; next pass continues
+
+        def apart(s):                            # avoid gluing the relay to the network
+            return min(abs(s[0] - o[0]) + abs(s[1] - o[1]) for o in subs) >= 6
+        finish = [s for s in ok_a if _wired(s, subs[b])]
+        relay = (next((s for s in finish if apart(s)), None) or (finish[0] if finish else None)
+                 or next((s for s in ok_a if apart(s)), None) or (ok_a[0] if ok_a else None))
         if relay is None:
             break                            # can't bridge; verifier will report it
         subs.append(relay)
@@ -274,8 +284,11 @@ def patch_power(layout: Layout, plan) -> list:
                     continue
                 ncov = sum(1 for e in dark if _supply_covers(s, e.tiles()))
                 dnet = min((abs(s[0] - o[0]) + abs(s[1] - o[1]) for o in subs),
-                           default=0)
-                key = (-ncov, dnet, s)
+                           default=12)
+                # prefer: most dark covered; then INSIDE wire reach but spread out --
+                # hugging the nearest substation made pointless side-by-side pairs
+                key = (-ncov, 0 if 6 <= dnet <= SUBSTATION_WIRE else 1,
+                       abs(dnet - 12), s)
                 if best is None or key < best[0]:
                     best = (key, s)
         if best is None:
