@@ -21,7 +21,8 @@ from fgr import fbsr_validation as fv                       # noqa: E402
 def audit(path: Path, dumper) -> list[str]:
     g = parse(path.read_text())
     issues = []
-    for c in fv.check_recipes(g, dumper=dumper):            # recipe ↔ machine + recipe existence
+    for c in (fv.check_recipes(g, dumper=dumper)            # recipe ↔ machine + existence
+              + fv.check_ingredients(g, dumper=dumper)):    # feeds == real ingredients
         if not c.ok and c.detail:
             issues += [s.strip() for s in c.detail.split(";")]
     for name, node in g.nodes.items():                      # input items / fluid sources exist?

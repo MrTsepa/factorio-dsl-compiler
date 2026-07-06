@@ -205,8 +205,10 @@ def card(rec):
     checks = rec.get("checks", [])
     nck = len(checks)
     if s == "PASS":
-        ck = (f"<details><summary class='chk ok'>[ok] all {nck} verifier checks pass — "
-              f"expand</summary>{checks_html(rec)}</details>")
+        extra = (" · recipes + ingredients match Factorio's own data"
+                 if rec.get("game_accurate") else "")
+        ck = (f"<details><summary class='chk ok'>[ok] all {nck} verifier checks pass"
+              f"{extra} — expand</summary>{checks_html(rec)}</details>")
     else:
         ck = checks_html(rec)
     return f"""
@@ -255,18 +257,37 @@ SHOWCASE = [
      "A deep multi-step build: smelting, gears, engines, batteries — with <b>two different "
      "fluids</b> (lubricant, acid) kept in isolated pipe networks."),
     ("examples/stress/science_3.fgr",
-     "A machine-generated science factory: furnaces, chemical plants, fluids and a wide "
-     "reconvergent middle — compiled and verified end to end."),
+     "A red + green + military science mall: smelting, ammo and grenade lines, a "
+     "coal/iron merge — every machine fed its real ingredients, end to end."),
 ]
 
 
 def build():
     print("rendering showcase ...")
     cases = []
+    dumper = None
+    try:
+        dumper = fbsr_validation._fbsr_dumper()
+    except Exception:                            # noqa: BLE001
+        pass
     for rel, blurb in SHOWCASE:
         p = ROOT / rel
         rec = process(p.stem, p.read_text(), render=True)
         rec["blurb"] = blurb
+        # GUARDRAIL: the landing shows only game-accurate builds. Every showcase spec
+        # must use real recipes, craftable by its machine, fed its REAL ingredients on
+        # the right channels -- checked against Factorio's own data. Synthetic-recipe
+        # stress cases are fine for the corpus, never for the front page.
+        if dumper is not None:
+            g = parse(p.read_text())
+            audit = (fbsr_validation.check_recipes(g, dumper=dumper)
+                     + fbsr_validation.check_ingredients(g, dumper=dumper))
+            bad = [c for c in audit if not c.ok]
+            if bad:
+                raise SystemExit(
+                    f"SHOWCASE case {rel} is not game-accurate: "
+                    + "; ".join(c.detail for c in bad))
+            rec["game_accurate"] = True
         cases.append(rec)
 
     print("validate-model ...")

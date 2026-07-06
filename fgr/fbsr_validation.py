@@ -236,6 +236,69 @@ def check_recipes(graph: Graph, profile: str = "vanilla", dumper="auto") -> list
     return checks
 
 
+def check_ingredients(graph: Graph, profile: str = "vanilla", dumper="auto") -> list[Check]:
+    """Spec-level check against REAL recipe data: every machine's incoming lanes must
+    deliver exactly its recipe's ingredients, each on the right channel (items by belt
+    `->`, fluids by pipe `~>`). This is the guardrail between "routes correctly" and
+    "actually crafts in-game": the physical oracle proves items REACH the machine; this
+    proves they're the items the recipe CONSUMES. Raises FbsrUnavailable if the game
+    data can't be loaded (caller treats as skip)."""
+    if dumper == "auto":
+        dumper = _fbsr_dumper()
+
+    def produces(name):
+        """(product, type) a node delivers downstream, from real data where possible."""
+        node = graph.nodes[name]
+        if node.kind is NodeKind.INPUT:
+            return node.item, "item"
+        if node.kind is NodeKind.FLUID:
+            return node.item, "fluid"
+        if node.recipe:
+            try:
+                d = _load_dump(node.recipe, "recipe", profile, dumper)
+            except FbsrUnavailable:
+                return node.recipe, "item"          # unknown recipe: named after itself
+            res = d.get("results") or d.get("products") or []
+            if res:
+                return res[0].get("name", node.recipe), res[0].get("type", "item")
+            return node.recipe, "item"
+        return None, None
+
+    missing, extra, wrong_ch = [], [], []
+    for name, node in graph.nodes.items():
+        if _MACHINE_PROTO.get(node.kind) is None or not node.recipe:
+            continue
+        try:
+            d = _load_dump(node.recipe, "recipe", profile, dumper)
+        except FbsrUnavailable:
+            continue                                 # existence flagged by check_recipes
+        want = {(i["name"], i.get("type", "item")) for i in d.get("ingredients", [])}
+        have = set()
+        for e in graph.edges:
+            if e.dst != name:
+                continue
+            prod, ptype = produces(e.src)
+            if prod is None:
+                continue
+            ch = "fluid" if e.fluid else "item"
+            have.add((prod, ch))
+            if (prod, ptype) in want and ch != ptype:
+                wrong_ch.append(f"{name}: {prod!r} must arrive by "
+                                f"{'pipe ~>' if ptype == 'fluid' else 'belt ->'}")
+        for ing, itype in sorted(want - have):
+            missing.append(f"{name} ({node.recipe}): missing {itype} {ing!r}")
+        for got, ch in sorted(have - want):
+            extra.append(f"{name} ({node.recipe}): fed {got!r} which the recipe "
+                         f"does not consume")
+    checks = [Check("every machine is fed exactly its recipe's real ingredients",
+                    not (missing or extra),
+                    "" if not (missing or extra) else "; ".join(missing + extra))]
+    if wrong_ch:
+        checks.append(Check("ingredients arrive on the right channel (belt vs pipe)",
+                            False, "; ".join(wrong_ch)))
+    return checks
+
+
 def _fluid_box_connections(dump):
     """Every fluid-box pipe connection in a prototype dump as
     (production_type, position, direction, connection_type)."""

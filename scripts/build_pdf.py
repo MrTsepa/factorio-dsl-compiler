@@ -80,12 +80,32 @@ def _text_block(lines, font, maxw):
     return out, len(out) * lh, lh
 
 
+_DUMPER = None
+
+
+def _recipe_stamp(g):
+    """'game-accurate' if the spec's recipes + feeds match real Factorio data, else
+    'synthetic recipes (routing stress)' -- shown in each page header so a shared PDF
+    never passes a fake build off as playable."""
+    global _DUMPER
+    from fgr import fbsr_validation as fv
+    try:
+        if _DUMPER is None:
+            _DUMPER = fv._fbsr_dumper()
+        audit = fv.check_recipes(g, dumper=_DUMPER) + fv.check_ingredients(g, dumper=_DUMPER)
+        return ("recipes: game-accurate (match Factorio data)"
+                if all(c.ok for c in audit) else "recipes: SYNTHETIC (routing stress only)")
+    except Exception:                            # noqa: BLE001
+        return "recipes: unchecked (FBSR unavailable)"
+
+
 def _evaluate(fp):
     rel = fp.relative_to(ROOT).as_posix()
     text = fp.read_text()
     rec = {"rel": rel, "dsl": text, "status": "COMPILE-ERROR", "checks": [], "err": None, "img": None}
     try:
         g = parse(text)
+        rec["stamp"] = _recipe_stamp(g)
         lay = compile_graph(g)
         rep = verify(g, lay)
         rec["status"] = "PASS" if rep.ok else "VERIFY-FAIL"
@@ -118,6 +138,8 @@ def _compose(rec):
         if rec["err"]:
             head_lines.append(("HEAD", "Error:"))
             head_lines.append(("BODY", "  " + rec["err"]))
+    if rec.get("stamp"):
+        head_lines.append(("BODY", rec["stamp"]))
     head_lines.append(("HEAD", "Spec (DSL):"))
     for ln in rec["dsl"].strip().split("\n"):
         head_lines.append(("MONO", "  " + ln))
@@ -215,7 +237,7 @@ SAMPLE = [
     "examples/complex/processing_unit.fgr",   # reconvergence + acid
     "examples/complex/sulfuric_acid.fgr",     # chemistry + fluids
     "examples/complex/flying_robot_frame.fgr",  # deep multi-step, two fluids
-    "examples/complex/wide_reconverge.fgr",     # 8 products into one chest (lane pairs)
+    "examples/stress/wide_reconverge.fgr",     # 8 products into one chest (lane pairs)
     "examples/stress/fluids_3.fgr",        # generated fluid web
     "examples/stress/highfanin_2.fgr",     # high fan-in
     "examples/stress/deepchain_4.fgr",     # depth-14 spine
