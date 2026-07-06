@@ -318,9 +318,11 @@ SIZED_BLURBS = {
         "sandwich rows with belts as local buses, machines positioned by prefix "
         "demand, and a lane WEAVE at the exit (a merge that fills BOTH belt sides — "
         "splitters preserve lane sides, so the second collector tunnels under and "
-        "side-loads from the north). <b>613 entities</b> (was 12,000 routed "
-        "point-to-point), measured <b>14.43/s steady</b>, first circuit at 31 "
-        "seconds, zero idle machines.",
+        "side-loads from the north). The boundary is minimal too: <b>one</b> iron "
+        "belt (a splitter halves it across the two blocks) plus two copper belts "
+        "(22.5/s is physics). <b>649 entities</b> (was 12,000 routed point-to-point), "
+        "measured <b>14.43/s steady</b>, first circuit at 36 seconds, zero idle "
+        "machines.",
 }
 
 

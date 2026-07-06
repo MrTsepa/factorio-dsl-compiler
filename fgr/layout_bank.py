@@ -249,6 +249,7 @@ def compile_bank(graph: Graph, dumper="auto"):
     W = slot_x(width_slots) + 3                            # east edge (power col incl.)
 
     copies: dict = {n: [] for n in stages}
+    raw_rows_pending: dict = {}                            # item -> [(y, block, stage, role)]
     input_ct = 0
     y = 0
     collector_belts = []                                   # (y_row, rate)
@@ -323,17 +324,7 @@ def compile_bank(graph: Graph, dumper="auto"):
                 if src is None or yy is None:
                     continue
                 if src[0] == "raw":
-                    input_ct += 1
-                    iname = f"in_{src[1]}_{input_ct}"
-                    g2.add_node(Node(iname, NodeKind.INPUT, item=src[1]))
-                    lay.add(PlacedEntity(CHEST_INPUT, -5, yy, item=src[1],
-                                         meta={"node": iname}))
-                    lay.add(PlacedEntity(LOADER, -4, yy, direction=E,
-                                         loader_type="output", meta={"net": f"b:{iname}"}))
-                    for x in range(-2, W):
-                        lay.add(PlacedEntity(BELT, x, yy, direction=E,
-                                             meta={"net": f"b:{iname}"}))
-                    copies.setdefault(("rawrow", b, i, role), iname)
+                    raw_rows_pending.setdefault(src[1], []).append((yy, b, i, role))
                 # bus rows are emitted by the PREVIOUS stage's output pass
 
             # machines + in-arms
@@ -390,6 +381,59 @@ def compile_bank(graph: Graph, dumper="auto"):
                 sub_positions.append((slot_x(p), y_mach))
             sub_positions.append((-8, y_mach))
         y += 4                                            # gap between blocks
+
+    # ---- raw boundaries: consolidate input belts --------------------------------------
+    # A boundary belt is loader-fed and consumed at the row ends -- it is NOT
+    # tap-drained, so it may run at 100%. When an item's total draw fits ONE belt but
+    # feeds TWO block rows, a single chest feeds a SPLITTER whose outputs run to both
+    # rows (each row then carries half its old load). Splitters preserve lane sides,
+    # which is exactly right for splitting a full two-lane feed.
+    split_ct = 0
+    for item, rows in sorted(raw_rows_pending.items()):
+        demand = raw_unit.get(item, 0.0) * target
+        n_boundary = max(1, math.ceil(demand / BELT_FULL))
+        if n_boundary == 1 and len(rows) == 2:
+            split_ct += 1
+            bx = -12 - 4 * split_ct
+            y0 = min(r[0] for r in rows)
+            y1 = max(r[0] for r in rows)
+            input_ct += 1
+            iname = f"in_{item}_{input_ct}"
+            g2.add_node(Node(iname, NodeKind.INPUT, item=item))
+            tag_i = {"net": f"b:{iname}"}
+            lay.add(PlacedEntity(CHEST_INPUT, bx - 1, y0, item=item,
+                                 meta={"node": iname}))
+            lay.add(PlacedEntity(LOADER, bx, y0, direction=E,
+                                 loader_type="output", meta=tag_i))
+            lay.add(PlacedEntity(BELT, bx + 2, y0, direction=E, meta=tag_i))
+            lay.add(PlacedEntity(SPLITTER, bx + 3, y0, direction=E, meta=tag_i))
+            # branch 1: straight east into row y0
+            for x in range(bx + 4, W):
+                lay.add(PlacedEntity(BELT, x, y0, direction=E, meta=tag_i))
+            # branch 2: east, CURVE south (curves keep both lanes), down, curve east
+            col = bx + 5
+            lay.add(PlacedEntity(BELT, bx + 4, y0 + 1, direction=E, meta=tag_i))
+            lay.add(PlacedEntity(BELT, col, y0 + 1, direction=S, meta=tag_i))
+            for yv in range(y0 + 2, y1):
+                lay.add(PlacedEntity(BELT, col, yv, direction=S, meta=tag_i))
+            lay.add(PlacedEntity(BELT, col, y1, direction=E, meta=tag_i))
+            for x in range(col + 1, W):
+                lay.add(PlacedEntity(BELT, x, y1, direction=E, meta=tag_i))
+            for yy, b, i, role in rows:
+                copies[("rawrow", b, i, role)] = iname
+        else:
+            for yy, b, i, role in rows:
+                input_ct += 1
+                iname = f"in_{item}_{input_ct}"
+                g2.add_node(Node(iname, NodeKind.INPUT, item=item))
+                lay.add(PlacedEntity(CHEST_INPUT, -5, yy, item=item,
+                                     meta={"node": iname}))
+                lay.add(PlacedEntity(LOADER, -4, yy, direction=E,
+                                     loader_type="output", meta={"net": f"b:{iname}"}))
+                for x in range(-2, W):
+                    lay.add(PlacedEntity(BELT, x, yy, direction=E,
+                                         meta={"net": f"b:{iname}"}))
+                copies[("rawrow", b, i, role)] = iname
 
     # ---- merge collectors -> single output belt -> chest --------------------------------
     last_stage = stages[-1]
