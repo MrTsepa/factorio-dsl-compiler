@@ -625,7 +625,8 @@ def compile_bank(graph: Graph, dumper="auto"):
                     proto = INSERTER if real_depth == 1 else LONG_INSERTER
                     lay.add(PlacedEntity(proto, sface[si + j], r["arm_out"],
                                          direction=N, meta={"role": "out"}))
-                    port_feeders.setdefault((n, tgt), []).append(mname)
+                    d = port_feeders.setdefault((n, tgt), {})
+                    d[mname] = min(d.get(mname, 1 << 30), sface[si + j])
             # belt rows owned by this stage
             if "bus" in r and n != last_stage and \
                     any(c == nxt for c, _amt in consumers[n]):
@@ -812,12 +813,29 @@ def compile_bank(graph: Graph, dumper="auto"):
         sub_positions.append((end_x - 1, out_y - 4))
 
     # ---- power ---------------------------------------------------------------------------
+    # substations are the LAST geometry: nudge any that would collide with the
+    # dynamically-allocated margins (long-haul columns, merge rails) until free
+    occ = set()
+    for e in lay.entities:
+        occ.update(e.tiles() if hasattr(e, "tiles") else [(e.x, e.y)])
     seen_sub = set()
     for sx_, sy_ in sub_positions:
-        if (sx_, sy_) in seen_sub:
+        placed_at = None
+        for dx, dy in ((0, 0), (1, 0), (-1, 0), (2, 0), (-2, 0), (3, 0), (-3, 0),
+                       (0, 1), (0, -1), (4, 0), (-4, 0)):
+            cx, cy = sx_ + dx, sy_ + dy
+            tiles = {(cx, cy), (cx + 1, cy), (cx, cy + 1), (cx + 1, cy + 1)}
+            if tiles & occ or (cx, cy) in seen_sub:
+                continue
+            placed_at = (cx, cy)
+            break
+        if placed_at is None:
             continue
-        seen_sub.add((sx_, sy_))
-        lay.add(PlacedEntity(SUBSTATION, sx_, sy_, meta={}))
+        seen_sub.add(placed_at)
+        occ.update({(placed_at[0], placed_at[1]), (placed_at[0] + 1, placed_at[1]),
+                    (placed_at[0], placed_at[1] + 1),
+                    (placed_at[0] + 1, placed_at[1] + 1)})
+        lay.add(PlacedEntity(SUBSTATION, placed_at[0], placed_at[1], meta={}))
     if sub_positions:
         lay.add(PlacedEntity(EEI, X_IN - 1, min(s[1] for s in sub_positions) - 7,
                              meta={}))
@@ -847,18 +865,18 @@ def compile_bank(graph: Graph, dumper="auto"):
                     port_row = src_r["bus"] if ("bus" in src_r and
                                                 ypos[(n, b)][slot] == src_r["bus"]) \
                         else src_r.get(("lh", n))
-                    feeders = set(port_feeders.get((src, port_row), []))
+                    feeders = port_feeders.get((src, port_row), {})
                     adjacent = (i and src == stages[i - 1]
                                 and slot in ("farN", "nearN"))
                     if adjacent:
-                        pxs, cxs = stage_xs[(src, b)], stage_xs[(n, b)]
+                        cxs = stage_xs[(n, b)]
                         k_far = slots[n]["k_far" if slot == "farN" else "k_near"]
                         for pj, p in enumerate(src_copies):
                             if p not in feeders:
                                 continue
+                            drop_x = feeders[p]    # the copy's WESTMOST bus drop
                             for cj, c in enumerate(block_copies):
-                                if slot_x(pxs[pj]) <= slot_x(cxs[cj]) + \
-                                        max(k_far - 1, 0):
+                                if drop_x <= slot_x(cxs[cj]) + max(k_far - 1, 0):
                                     g2.add_edge(p, c)
                     else:                          # long-haul: full supply arrives
                         for p in src_copies:       # at the row's east end

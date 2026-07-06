@@ -33,7 +33,6 @@ NODE_CAP = 140
 def evaluate(fp: Path):
     text = fp.read_text()
     g = parse(text)
-    t0 = time.time()
     rec = {"rel": str(fp.relative_to(ROOT)), "dsl": text, "status": "SKIP",
            "checks": [], "err": None, "img": None}
     lay, plan, mode = None, None, "bank"
@@ -68,7 +67,14 @@ def evaluate(fp: Path):
         rec["stamp"] = (f"{mode} | machines {machines} | blocks "
                         f"{plan.get('blocks', '-')} | entities {len(lay.entities)}"
                         f" | placed flow {got:.2f}/s >= {target}/s"
-                        f" | compile+verify {time.time() - t0:.0f}s")
+                        f" | blueprint: solutions_bp/{fp.stem}.bp")
+        bp = to_blueprint_string(lay, fp.stem,
+                                 description=f"one-belt suite: {fp.stem} "
+                                 f">= {target}/s (fgr)")
+        bp_dir = ROOT / "out" / "solutions_bp"
+        bp_dir.mkdir(parents=True, exist_ok=True)
+        (bp_dir / f"{fp.stem}.bp").write_text(bp)
+        rec["bp"] = bp
         png = OUT_DIR / f"{fp.stem}.png"
         try:
             render_blueprint_string(to_blueprint_string(lay, fp.stem), png,
@@ -101,8 +107,25 @@ def main() -> int:
     pages = [_cover(recs)] + [_compose(r) for r in passing]
     pages[0].save(out_pdf, "PDF", save_all=True, append_images=pages[1:],
                   resolution=150.0)
+    # companion page: every blueprint with a copy button (a PDF page is an image;
+    # this is the clickable access)
+    import html as _h
+    rows = "".join(
+        f"<tr><td class='m'>{r['rel'].split('/')[-1][:-4]}</td>"
+        f"<td>{r.get('entities')}</td><td>{r.get('flow')}</td>"
+        f"<td><button data-bp=\"{_h.escape(r['bp'])}\" "
+        f"onclick=\"navigator.clipboard.writeText(this.dataset.bp);"
+        f"this.textContent='Copied!'\">Copy blueprint</button></td></tr>"
+        for r in passing)
+    (ROOT / "out" / "solutions.html").write_text(
+        "<!doctype html><meta charset='utf-8'><title>fgr solutions</title>"
+        "<style>body{font:14px sans-serif;margin:24px}td{padding:4px 10px;"
+        "border-bottom:1px solid #ddd}.m{font-family:monospace}</style>"
+        f"<h1>{len(passing)} working one-belt solutions</h1>"
+        "<table><tr><th>item</th><th>entities</th><th>flow/s</th><th></th></tr>"
+        + rows + "</table>")
     print(f"\nwrote {out_pdf} ({out_pdf.stat().st_size // 1024} KB): "
-          f"{len(passing)} solutions, sorted leanest-first")
+          f"{len(passing)} solutions + out/solutions.html + out/solutions_bp/")
     return 0
 
 
