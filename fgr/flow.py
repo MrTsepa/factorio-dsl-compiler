@@ -73,18 +73,33 @@ def estimate(graph: Graph, layout: Layout, dumper="auto") -> dict:
                 trans_at[t] = e
 
     # ---- typed edges ----------------------------------------------------------------
-    arms = []          # (pick_cid, drop_cid, rate)
-    pushes = []        # (src_cid, dst_cid, kind) kind: straight | side | drop-like
+    def side_of(tile, d, from_pos):
+        """Which lane side ('L'/'R' relative to travel direction d) does a feeder
+        or inserter sitting at from_pos touch on the belt tile?"""
+        vx, vy = DIR_DELTA[d]
+        rx, ry = from_pos[0] - tile[0], from_pos[1] - tile[1]
+        cross = vx * ry - vy * rx
+        return "R" if cross > 0 else "L"
+
+    arms = []          # (pick_cid, drop_cid, rate, drop_side_or_None)
+    pushes = []        # (src_cid, dst_cid, kind, side_or_None)
     accepts = _accepts_factory(trans_at)
     for e in layout.entities:
         if e.proto in (INSERTER, LONG_INSERTER):
             reach = 2 if e.proto == LONG_INSERTER else 1
             dx, dy = DIR_DELTA[e.direction]
             pick = carrier_at.get((e.x + reach * dx, e.y + reach * dy))
-            drop = carrier_at.get((e.x - reach * dx, e.y - reach * dy))
+            drop_t = (e.x - reach * dx, e.y - reach * dy)
+            drop = carrier_at.get(drop_t)
             if pick is None or drop is None:
                 continue
-            arms.append((pick, drop, _arm_rate(e.proto, pick[0])))
+            dside = None
+            de = trans_at.get(drop_t)
+            if de is not None and de.proto in (BELT, UNDERGROUND):
+                # inserters drop on the FAR lane: the side away from the inserter
+                near = side_of(drop_t, de.direction or 0, (e.x, e.y))
+                dside = "L" if near == "R" else "R"
+            arms.append((pick, drop, _arm_rate(e.proto, pick[0]), dside))
         elif e.proto == BELT:
             d = e.direction or 0
             dx, dy = DIR_DELTA[d]
@@ -92,10 +107,11 @@ def estimate(graph: Graph, layout: Layout, dumper="auto") -> dict:
             if accepts(t, d):
                 dst = carrier_at[t]
                 te = trans_at[t]
-                straight = (te.direction or 0) == d and te.proto != SPLITTER or \
-                    te.proto == SPLITTER
+                straight = (te.direction or 0) == d or te.proto == SPLITTER
+                sside = None if straight else side_of(t, te.direction or 0,
+                                                      (e.x, e.y))
                 pushes.append((("belt", (e.x, e.y)), dst,
-                               "straight" if straight else "side"))
+                               "straight" if straight else "side", sside))
         elif e.proto == SPLITTER:
             d = e.direction or 0
             dx, dy = DIR_DELTA[d]
@@ -103,7 +119,7 @@ def estimate(graph: Graph, layout: Layout, dumper="auto") -> dict:
             for t in e.tiles():
                 nt = (t[0] + dx, t[1] + dy)
                 if accepts(nt, d):
-                    pushes.append((cid, carrier_at[nt], "straight"))
+                    pushes.append((cid, carrier_at[nt], "straight", None))
         elif e.proto == UNDERGROUND:
             d = e.direction or 0
             dx, dy = DIR_DELTA[d]
@@ -111,12 +127,15 @@ def estimate(graph: Graph, layout: Layout, dumper="auto") -> dict:
                 t = (e.x + dx, e.y + dy)
                 if accepts(t, d):
                     te = trans_at[t]
+                    st = (te.direction or 0) == d
                     pushes.append((("ug", (e.x, e.y)), carrier_at[t],
-                                   "straight" if (te.direction or 0) == d else "side"))
+                                   "straight" if st else "side",
+                                   None if st else side_of(t, te.direction or 0,
+                                                           (e.x, e.y))))
             else:
                 ex = _v._ug_exit((e.x, e.y), d, trans_at)
                 if ex is not None:
-                    pushes.append((("ug", (e.x, e.y)), ("ug", ex), "straight"))
+                    pushes.append((("ug", (e.x, e.y)), ("ug", ex), "straight", None))
         elif e.proto == LOADER:
             d = e.direction or 0
             dx, dy = DIR_DELTA[d]
@@ -125,39 +144,41 @@ def estimate(graph: Graph, layout: Layout, dumper="auto") -> dict:
             if e.loader_type == "output":
                 body = carrier_at.get((rear[0] - dx, rear[1] - dy))
                 if body is not None:
-                    pushes.append((body, cid, "loader"))
+                    pushes.append((body, cid, "loader", None))
                 t = (front[0] + dx, front[1] + dy)
                 if accepts(t, d):
-                    pushes.append((cid, carrier_at[t], "loader"))
+                    pushes.append((cid, carrier_at[t], "loader", None))
             else:
                 body = carrier_at.get((front[0] + dx, front[1] + dy))
                 if body is not None:
-                    pushes.append((cid, body, "loader"))
+                    pushes.append((cid, body, "loader", None))
 
-    # ---- lane classes (monotone fixed point) ------------------------------------------
-    # how many belt SIDES carry items: loader/splitter feeds fill both; a straight
-    # belt feed inherits its source's lanes; each side-load adds one; an inserter
-    # drop lands on the far lane only (one).
+    # ---- lane classes (monotone fixed point, SIDE-AWARE) ------------------------------
+    # which belt SIDES carry items: an inserter drop fills the far side only, a
+    # side-load fills the ENTRY side, straight feeds inherit the source's sides,
+    # loaders/splitters fill both. Two feeds from the SAME side still occupy one
+    # lane -- the game-measured fact a naive per-feed counter got wrong (a routed
+    # merge that side-loads everything from the south caps at 7.5/s, one lane).
     lanes: dict = {}
 
     def lane_of(c):
-        return lanes.get(c, 0)
-    for pick, drop, _r in arms:
-        if drop[0] != "body":
-            lanes[drop] = max(lane_of(drop), 1)
+        return lanes.get(c, frozenset())
+    for pick, drop, _r, dside in arms:
+        if drop[0] != "body" and dside:
+            lanes[drop] = lane_of(drop) | {dside}
     for _ in range(_ITERS):
         changed = False
-        for src, dst, kind in pushes:
+        for src, dst, kind, sside in pushes:
             if dst[0] == "body":
                 continue
             if kind == "loader" or src[0] in ("loader", "splitter"):
-                cand = 2
+                cand = frozenset("LR")
             elif kind == "straight":
                 cand = lane_of(src)
-            else:                                  # side-load: one more side fills
-                cand = min(2, lane_of(dst) + 1)
-            new = min(2, max(lane_of(dst), cand))
-            if new > lane_of(dst):
+            else:
+                cand = lane_of(dst) | ({sside} if sside else set())
+            new = frozenset(lane_of(dst) | cand)
+            if new != lane_of(dst):
                 lanes[dst] = new
                 changed = True
         if not changed:
@@ -168,7 +189,7 @@ def estimate(graph: Graph, layout: Layout, dumper="auto") -> dict:
             return float("inf")
         if c[0] == "loader":
             return BELT_FULL
-        return LANE_CAP * max(lane_of(c), 1)
+        return LANE_CAP * max(len(lane_of(c)), 1)
 
     # ---- machine / node data -----------------------------------------------------------
     m_cap, m_needs, m_out = {}, {}, {}
@@ -214,7 +235,7 @@ def estimate(graph: Graph, layout: Layout, dumper="auto") -> dict:
     out_rate = {}
     inflow: dict = {}
     by_src_arms: dict = {}
-    for pick, drop, r in arms:
+    for pick, drop, r, _ds in arms:
         by_src_arms.setdefault(pick, []).append((drop, r))
 
     def body_rate(name):
@@ -234,7 +255,7 @@ def estimate(graph: Graph, layout: Layout, dumper="auto") -> dict:
         prev = dict(out_rate)
         # transport carriers: relay
         agg: dict = {}
-        for src, dst, kind in pushes:
+        for src, dst, kind, _s in pushes:
             r = out_rate.get(src, 0.0)
             agg[dst] = agg.get(dst, 0.0) + r
         # arms: proportional share of the source's emission, capped per arm
@@ -273,7 +294,7 @@ def estimate(graph: Graph, layout: Layout, dumper="auto") -> dict:
 
     # ---- collect per-output arrivals ---------------------------------------------------
     arrivals = {}
-    for src, dst, kind in pushes:
+    for src, dst, kind, _s in pushes:
         if dst[0] == "body" and dst[1] in sinks:
             arrivals[dst[1]] = arrivals.get(dst[1], 0.0) + \
                 min(out_rate.get(src, 0.0), BELT_FULL)

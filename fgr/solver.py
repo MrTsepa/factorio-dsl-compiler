@@ -225,12 +225,12 @@ def solve(graph: Graph, dumper="auto") -> tuple[Graph, dict]:
                 n_lanes = min(n_lanes, max(1, math.ceil(declared / BELT_FULL)))
             lanes[i] = n_lanes
 
-    # DELIVERY lanes: the belt feeding an output chest is filled by inserter drops
-    # (far lane only) -- one side, 7.5/s, NOT the full 15/s a loader-fed belt moves.
-    # Size chest count per LANE, with the same headroom rule as input lanes.
+    # BOUNDARY CONTRACT: one output chest per FULL BELT of target (an output is a
+    # belt the player splices into their base -- '@ 15/s' means ONE belt, not three).
+    # Whether the routed merge actually fills both lanes is judged by the placed-
+    # layout flow oracle; an honest refusal beats a contract-breaking extra belt.
     out_total = {o: target[o] for o in outputs}
-    out_chests = {o: max(1, math.ceil(t / (LANE_CAP * LANE_HEADROOM)))
-                  for o, t in out_total.items()}
+    out_chests = {o: max(1, math.ceil(t / BELT_FULL)) for o, t in out_total.items()}
 
     # ---- build the expanded graph ---------------------------------------------------
     g2 = Graph()
@@ -342,7 +342,8 @@ def solve(graph: Graph, dumper="auto") -> tuple[Graph, dict]:
                 continue
             cap_i = lanes.get(i, 1) * BELT_FULL
             lim = min(lim, cap_i / d) if lim is not None else cap_i / d
-        deliver = out_chests.get(o, 1) * LANE_CAP   # single-lane collectors
+        deliver = out_chests.get(o, 1) * BELT_FULL  # one belt per chest; the flow
+        #                                               oracle grades the real lanes
         lim = min(lim, deliver) if lim is not None else deliver
         expected[o] = round(lim, 4) if lim is not None else None
 
