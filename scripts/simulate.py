@@ -134,7 +134,11 @@ class Runner:
         if self.native:
             cmd = [str(GAME / "bin" / "x64" / "factorio")]
         else:
-            cmd = ["docker", "run", "--rm", "--platform", "linux/amd64",
+            subprocess.run(["docker", "rm", "-f", "fgr-sim-run"],
+                           capture_output=True)   # a dead parent must not leak its
+            #                                       container into the next run
+            cmd = ["docker", "run", "--rm", "--name", "fgr-sim-run",
+                   "--platform", "linux/amd64",
                    "-v", f"{GAME}:/opt/factorio",
                    "-v", f"{WRITE}:/fdata",
                    "debian:stable-slim", "/opt/factorio/bin/x64/factorio"]

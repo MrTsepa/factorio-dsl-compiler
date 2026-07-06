@@ -309,6 +309,12 @@ SIZED_BLURBS = {
     "battery_05": "FLUIDS: <b>0.5 batteries / second</b> from chemical plants — acid "
         "arrives by pipe (2.0 segments are uncapacitated), so only the plants and the "
         "item feeds needed sizing.",
+    "greenchips_belt": "THE SCALE TEST: <b>a full yellow belt (15/s) of electronic "
+        "circuits</b> — 107 machines, 23,834 entities, from an eight-line spec. It "
+        "compiles, verifies, and runs; but the current placement stretches the "
+        "dedicated lanes to hundreds of tiles, so filling the belts takes hours of "
+        "game time. Structurally sound, geometrically naive — the case that motivates "
+        "bank-row placement (Stage C).",
 }
 
 
@@ -359,6 +365,7 @@ def sized_cards():
         rec["blurb"] = SIZED_BLURBS.get(p.stem, "")
         rec["plan"] = plan
         rec["measured"] = meas
+        rec["sim_note"] = (results.get(p.stem) or {}).get("note")
         cards.append(rec)
     return cards
 
@@ -380,6 +387,9 @@ def plan_html(rec):
     meas = rec.get("measured") or {}
     mline = "".join(f"<div class='rline'>measured in-game: {esc(it)} <b>{v}/s</b></div>"
                     for it, v in meas.items())
+    if not meas and rec.get("sim_note"):
+        mline = ("<div class='rline muted'>in-game: "
+                 + esc(rec["sim_note"]) + "</div>")
     return (f"<div class='rates'><div class='rtitle'>&#9881; sizing plan "
             f"<span class='muted'>(embedded in the blueprint tooltip)</span></div>"
             f"<div class='rline'>{' · '.join(tgt)}</div>{mline}"
