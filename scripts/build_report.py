@@ -456,7 +456,7 @@ def suite_section():
                                          description=f"one-belt suite: {r['item']} "
                                          f">= 15/s (fgr solve)")
                 bp_btn = (f"<button class='copy' data-bp='{esc(bp)}' "
-                          f"onclick='cp(this)'>Copy blueprint</button>")
+                          f"onclick='copyBp(this)'>Copy blueprint</button>")
             except Exception as ex:                       # noqa: BLE001
                 print(f"  ! suite bp {r['item']}: {str(ex)[:80]}")
         flow = r.get("flow_per_s", "")
