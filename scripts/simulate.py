@@ -172,9 +172,27 @@ def simulate(fgr: Path, ticks: int, keep: bool = False) -> dict:
     return data
 
 
+def _ols(pts):
+    n = len(pts)
+    sx = sum(t for t, _ in pts)
+    sy = sum(v for _, v in pts)
+    sxx = sum(t * t for t, _ in pts)
+    sxy = sum(t * v for t, v in pts)
+    d = n * sxx - sx * sx
+    return (n * sxy - sx * sy) / d if d else 0.0
+
+
 def fit_rates(data: dict, ticks: int) -> dict:
-    """items/s per output item: least-squares slope over the last 60% of samples
-    (skipping warm-up), plus time-to-first-item as the measured warm-up."""
+    """items/s per output item, with STEADINESS instead of a fixed window:
+
+    * the fit starts 30 game-seconds after the item's first arrival (warm-up out);
+    * the window is split in half and both slopes must agree within 8% -- otherwise
+      the series is a transient (still ramping / regime about to change / chest
+      saturating) and is labelled unsteady rather than reported as a rate;
+    * fewer than ~30 items in the window -> quantization dominates -> low confidence.
+
+    The engine is deterministic, so repeated runs are worthless as error bars; the
+    honest sensitivity axis is the window itself, which the split-half test probes."""
     samples = data.get("samples", [])
     if len(samples) < 10:
         raise SystemExit(f"too few samples ({len(samples)}) -- did the build revive? "
@@ -184,17 +202,33 @@ def fit_rates(data: dict, ticks: int) -> dict:
     for it in items:
         pts = [(s["tick"] / 60.0, (s.get("out") or {}).get(it, 0)) for s in samples]
         first = next((t for t, v in pts if v > 0), None)
-        tail = pts[int(len(pts) * 0.4):]
-        n = len(tail)
-        sx = sum(t for t, _ in tail)
-        sy = sum(v for _, v in tail)
-        sxx = sum(t * t for t, _ in tail)
-        sxy = sum(t * v for t, v in tail)
-        denom = n * sxx - sx * sx
-        slope = (n * sxy - sx * sy) / denom if denom else 0.0
-        out[it] = {"measured_per_s": round(slope, 4),
-                   "first_item_s": round(first, 1) if first is not None else None,
-                   "final_count": pts[-1][1]}
+        rec = {"first_item_s": round(first, 1) if first is not None else None,
+               "final_count": pts[-1][1], "steady": False,
+               "measured_per_s": None, "note": ""}
+        if first is None:
+            rec["note"] = "never produced in this run"
+            out[it] = rec
+            continue
+        win = [(t, v) for t, v in pts if t >= first + 30]
+        if len(win) < 20:
+            rec["note"] = "produced too late in the run to measure"
+            out[it] = rec
+            continue
+        half = len(win) // 2
+        a, b = _ols(win[:half]), _ols(win[half:])
+        slope = _ols(win)
+        n_items = win[-1][1] - win[0][1]
+        rec["measured_per_s"] = round(slope, 4)
+        rec["window_halves_per_s"] = [round(a, 4), round(b, 4)]
+        if a <= 0 or b <= 0 or abs(a - b) / max(a, b) > 0.08:
+            rec["note"] = ("transient: window halves disagree "
+                           f"({a:.4f} vs {b:.4f}/s) -- run longer")
+        elif n_items < 30:
+            rec["steady"] = True
+            rec["note"] = f"steady but only {int(n_items)} items in window (quantized)"
+        else:
+            rec["steady"] = True
+        out[it] = rec
     return out
 
 
@@ -226,8 +260,10 @@ def main() -> int:
 
     print("\n## measured (game) vs predicted (fgr rates)")
     for it, m in measured.items():
-        print(f"  {it}: measured {m['measured_per_s']}/s "
-              f"(first item at {m['first_item_s']}s, {m['final_count']} total)")
+        tag = "steady" if m.get("steady") else "NOT STEADY"
+        note = f" [{m['note']}]" if m.get("note") else ""
+        print(f"  {it}: {m['measured_per_s']}/s ({tag}) "
+              f"first at {m['first_item_s']}s, {m['final_count']} total{note}")
     if predicted:
         print(f"  predicted sustained: {predicted['sustained']}")
         print(f"  predicted uniform (machine-limited): {predicted['uniform']}")

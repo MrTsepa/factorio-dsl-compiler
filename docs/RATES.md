@@ -129,21 +129,34 @@ game install), expansions disabled, recipes enabled *without* researching techs 
 grants inserter-capacity bonuses a fresh world doesn't have — the rates model targets
 fresh-world hardware).
 
-**First results** (measured slope of output-chest fill, warm-up discarded):
+**Methodology** (hard-won; the first attempt got this wrong): sample every output
+chest once per game-second; discard everything before `first_item + 30 s`; split the
+remaining window in half and require the two slopes to agree within 8% — otherwise
+the series is a **transient** and is refused, not reported (a fixed "last 60%"
+window once averaged 126 s of zeros into red science's rate and reported a number
+that was neither warm-up nor steady state). The engine is deterministic, so repeated
+runs are meaningless as error bars — the honest sensitivity axis is window choice,
+which the split-half test probes; quantization is flagged when a window holds <30
+items. Chests must stay far from full (a saturating chest reads as a fake steady
+state); production_statistics is the planned cross-check.
 
-| case | predicted sustained | measured | error | warm-up (first item) |
+**Results at joint steady state** (science_3 needed 30 game-minutes; ~88 s wall):
+
+| output | binding constraint (predicted) | predicted | measured | error |
 |---|---|---|---|---|
-| gears | 0.42/s | **0.454/s** | +8% | 9 s |
-| circuits | 0.28/s | **0.286/s** | +2% | 15 s |
-| science_3 (red) | 0.084/s | **0.092/s** | +9% | 318 s |
-| science_3 (military) | 0.084/s | **0.094/s** | +11% | 89 s |
+| gears | inserter arm | 0.42/s | 0.454/s | +8% |
+| circuits | inserter arm | 0.28/s | 0.286/s | +2% |
+| science_3 red | its own machine (solo cap) | 0.150/s | **0.150/s** | 0% |
+| science_3 green | its own machine | 0.125/s | **0.125/s** | 0% |
+| science_3 military | inserter chain | 0.084/s | 0.0938/s | +12% |
 
-The model holds: every measured rate sits between the sustained estimate and the
-machine limit, slightly above sustained (the pure-rotation swing model is a touch
-conservative). And the warm-up column quantifies exactly the effect observed by hand
-in-game: on shared tapped belts, downstream consumers fill LAST — red science's first
-pack arrives after five minutes while military's arrives at 89 s. 2 minutes of game
-time simulate in ~2 s of wall time.
+Two lessons the game taught the model: (1) **machine-limited predictions are exact**;
+inserter-limited ones run 2–12% above the pure-rotation swing estimate (real arms
+overlap pickup with travel — the model is deliberately conservative). (2) The game's
+equilibrium is **not the uniform fair-share point**: each output runs as fast as its
+own constraints allow given shared supply (red hit its solo cap even with everything
+else running). Warm-up is real and long on shared tapped belts — military's first
+pack at 89 s, red's at 318 s, green's at 470 s.
 
 The verifier chain is now *spec → physical topology (oracle) → game-accurate recipes
 (dumps) → measured throughput (the game itself)* — no stronger ground truth exists.
@@ -158,8 +171,8 @@ environments without a game install.)
 1. ✅ Stage A (this commit): metadata + bottleneck honesty on every blueprint.
 2. Stage B solver + verifier capacity check — pure math + oracle, no layout risk.
 3. Stage C banks — behind a flag, graded case-by-case like every generator change.
-4. ✅ Stage D headless simulation — closed the loop: predictions within 2–11% of
-   game-measured rates on the first three cases.
+4. ✅ Stage D headless simulation — closed the loop: machine-limited predictions
+   exact; inserter-limited within 2–12% (conservative by design).
 
 ## Sources
 
