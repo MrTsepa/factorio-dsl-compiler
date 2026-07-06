@@ -2,30 +2,30 @@
 
 A full yellow belt (15/s) of each of 61 base-game items; specs generated
 from real recipe data by `scripts/belt_suite.py --gen`, graded by the
-verifier + the placed-layout flow oracle (`--run`, subprocess-isolated,
-150 s/case). Regenerate any time — this file records the current break map.
+verifier + the SIDE-AWARE placed-layout flow oracle (`--run`). The oracle
+now agrees with in-game measurements: a one-sided routed merge is ONE lane
+(7.5/s) no matter how many chests you'd be tempted to add — the boundary
+contract is one output chest per full belt.
 
-**15 / 61 carry the full belt** (4 as compact banks), 2 verify but fall short, 41 too big for the routed
-fallback (>100 nodes), 3 time out in v3 negotiation. 0 verifier
-failures, 0 errors.
+**7 / 61 honestly carry the full belt** (5 as compact banks), 10 verify but fall short (routed one-lane merges at 7.5/s,
+plus near-misses), 41 too big for the routed fallback, 3
+time out in v3 negotiation. 0 verifier failures, 0 errors.
 
 | outcome | items |
 |---|---|
-| full belt (bank) | copper_cable, electronic_circuit, iron_stick, pipe |
-| full belt (routed) | battery, burner_inserter, concrete, explosives, firearm_magazine, iron_chest, iron_gear_wheel, plastic_bar, stone_brick, stone_furnace, sulfur |
-| short | small_electric_pole (14.975/s), transport_belt (13.722/s) |
+| full belt (bank) | copper_cable, electronic_circuit, iron_stick, pipe, small_electric_pole |
+| full belt (routed, both-lane merge) | plastic_bar, sulfur |
+| short | battery (7.5/s), burner_inserter (7.5/s), concrete (7.5/s), explosives (7.5/s), firearm_magazine (7.5/s), iron_chest (7.5/s), iron_gear_wheel (7.5/s), stone_brick (7.5/s), stone_furnace (7.5/s), transport_belt (14.724/s) |
 | v3 timeout (150 s) | inserter, rail, underground_belt |
 
-## Why the bank template falls back (the v2 priority list, measured)
+## The roadmap this measures (priority order)
 
-1. **DAG shapes (~18 items)** — a stage consumes a NON-adjacent stage's
-   product (inserter, lab, radar, splitter, …). Fix: multi-bus rows, both
-   machine faces.
-2. **Fluids in the chain (17)** — battery-tier and up. Fix: a pipe row in
-   the sandwich.
-3. **>2 collector lanes (12)** — blocks > 2 at 15/s of mid-tier items.
-   Fix: mirrored blocks sharing collector rows (facing arm rows fill
-   opposite lanes) + multi-belt outputs.
-4. **Scale (41 too-big, 90..2,978 machines)** — a full belt of high-tier
-   items is a megabase, not a blueprint; per-tier targets (items/min)
-   would make these meaningful, the rest is bank-v2 coverage.
+1. **Fluids in banks** — every chem item (battery, concrete, sulfur*,
+   plastic*, explosives) needs the bank's lane weave to fill both output
+   lanes; the routed path caps at one lane. (*pass today only because their
+   routed merges happen to enter from both sides — geometry luck the oracle
+   now grades per layout.)
+2. **Mirrored blocks / multi-belt outputs** — unlocks >15/s and most of the
+   41 too-big items, along with per-tier targets (items/min).
+3. **fastbelt-class long-hauls** — a 5-per-craft ingredient overflows one
+   drop-fed lane; needs two long-haul rows or adjacency-aware reordering.
