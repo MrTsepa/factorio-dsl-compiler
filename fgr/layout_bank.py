@@ -1,32 +1,44 @@
-"""The BANK generator: classic sandwich-row layouts for rate-sized chains.
+"""The BANK generator: classic sandwich-row layouts for rate-sized specs.
 
 Real belt builds don't route point-to-point lanes -- they put machines in rows with
-belts as LOCAL buses: a cable machine drops onto the bus and the circuit machine two
-tiles east picks it up, so no belt cross-section ever carries the aggregate flow.
-That is why a hand-built 15/s circuit factory is ~2 orders of magnitude smaller than
-a routed one and saturates in seconds. This module compiles that shape directly.
+belts as LOCAL buses: a producer drops onto the bus and the consumer two tiles east
+picks it up, so no belt cross-section carries the aggregate flow. This module
+compiles that shape directly; a hand-built 15/s circuit factory is two orders of
+magnitude smaller than a routed one and saturates in seconds, and so are these.
 
-Template (y grows downward, belts flow EAST), one stage:
+Template (y grows downward), one stage:
 
-    [far belt]     second ingredient (bus from the previous stage, or a raw)
-    [near belt]    first ingredient
-    [arm lane]     normal inserters pick near (reach 1), LONG-HANDED pick far (reach 2)
+    [far N belt]   input (long arms, reach 2): adjacent bus / long-haul / raw
+    [near N belt]  input (normal arms): raw / long-haul
+    [arm lane N]
     [machines]     3 rows
-    [arm lane]     output arms: normal drop to the row below, LONG drop two below
-    [bus belt]     this stage's product = next stage's far belt
-    ...
-    [collector(s)] last stage drops here; a drop-fed belt carries ONE lane (7.5/s),
-                   so two half-rate collectors merge through a SPLITTER into a single
-                   both-lanes output belt -> loader -> chest.
+    [arm lane S]   output arms (and third-input arms picking south)
+    [near S belt]  optional third input row -- v2
+    [bus rows]     outputs: the ADJACENT bus (next stage's far belt) and/or a
+                   LONG-HAUL row for a non-adjacent consumer -- v2
 
-Sizing is derived from the TEMPLATE's arm slots (3 top, 3 bottom per machine) and the
-game-measured calibration rates, so the plan and the layout cannot disagree. Blocks
-tile vertically when a raw lane would exceed LANE_HEADROOM. Substation columns sit in
-reserved 2-wide gaps of the machine rows; belts run through the gaps uninterrupted.
+v2 additions (driven by the one-belt suite's break map):
+* a stage may consume ANY earlier stage's product: the producer emits a dedicated
+  long-haul row that runs east past the build, descends a margin column (crossing
+  nothing), and re-enters the consumer's input row flowing WEST -- arms don't care
+  about belt direction, and the full supply enters at the row's east end, so tap
+  order is starvation-free;
+* up to THREE item ingredients: the third rides a south input row; output arms are
+  then LONG (they reach over it to the single bus row).
 
-Applicability (v1): belt-only graphs, one output, every machine stage's item
-ingredients drawn from raw inputs plus the immediately-previous stage. Anything else
-falls back to the generic solver + v3 router.
+Output ports are arm-reach-gated: the arm lane reaches depth 1 (normal) and depth 2
+(long), so a stage has at most two output rows -- and exactly one when a south input
+row occupies depth 1. Shapes outside these gates raise BankInapplicable and the
+generic solver + v3 router take over: coverage only widens, existing passes cannot
+regress.
+
+Everything from v1 is preserved: sizing derived from the template's arm slots (plan
+and layout cannot disagree), machines positioned by PREFIX DEMAND along adjacent
+buses, blocks tiling when a raw lane would exceed LANE_HEADROOM, boundary chests on
+ONE aligned column (X_IN) with splitter fan-out when one belt feeds two rows,
+substations in reserved power slots, and the exit LANE WEAVE (splitters preserve
+lane sides, so the second collector tunnels under the output row and side-loads
+from the north to fill the empty lane).
 """
 
 from __future__ import annotations
@@ -47,19 +59,29 @@ N, E, S = 0, 4, 8
 W_DIR = 12
 _MACHINE_KINDS = {NodeKind.ASSEMBLER: ASSEMBLER, NodeKind.CHEMICAL: CHEMICAL,
                   NodeKind.FURNACE: FURNACE}
-POWER_PITCH = 15          # substation column every N machine slots (supply area 18)
 X_IN = -6                 # the INPUT column: every boundary chest sits here, outside
 #                           the factory body, so a player can box-select and replace
 #                           the scaffolding with real feeds in one edit
+
+
+def blocks_hint(raw_unit, target):
+    lane_usable = BELT_FULL * LANE_HEADROOM
+    b = 1
+    for _ing, d in raw_unit.items():
+        b = max(b, math.ceil(d * target / lane_usable))
+    return b
 
 
 class BankInapplicable(RuntimeError):
     """This spec doesn't fit the sandwich template; use the generic path."""
 
 
-def plan_chain(graph: Graph, dumper):
-    """Order machine stages and check template applicability. Returns
-    (stages, raws, output) where stages = [(node, recipe-info)] topological."""
+# ---------------------------------------------------------------------------
+# Planning: stage order, input-row assignment, arm slots.
+# ---------------------------------------------------------------------------
+def plan_dag(graph: Graph, dumper):
+    """Topologically order machine stages and assign every ingredient to a template
+    row. Raises BankInapplicable for shapes the emitter doesn't handle."""
     if any(e.fluid for e in graph.edges):
         raise BankInapplicable("fluids not yet supported by the bank template")
     outputs = [n for n, nd in graph.nodes.items() if nd.kind is NodeKind.OUTPUT]
@@ -76,7 +98,6 @@ def plan_chain(graph: Graph, dumper):
         product[n] = prod
         needs[n] = _ingredients(graph.nodes[n], dumper)
 
-    # topological order along declared edges
     order, seen = [], set()
 
     def visit(n):
@@ -90,70 +111,123 @@ def plan_chain(graph: Graph, dumper):
     for n in machines:
         visit(n)
 
+    by_product = {}
+    for n in order:
+        if product[n] in by_product:
+            raise BankInapplicable(f"two stages produce {product[n]!r}")
+        by_product[product[n]] = n
     raw_items = set(raws.values())
+
+    # per stage: ingredient -> ("raw", item) | ("stage", src_stage)
+    sources: dict[str, dict] = {}
     for i, n in enumerate(order):
-        prev_prod = product[order[i - 1]] if i else None
-        for ing in needs[n]:
-            if ing in raw_items or ing == prev_prod:
-                continue
-            raise BankInapplicable(
-                f"stage {n} needs {ing!r} which is neither a raw input nor the "
-                f"previous stage's product")
-        if len(needs[n]) > 2:
+        if len(needs[n]) > 3:
             raise BankInapplicable(f"stage {n} has {len(needs[n])} ingredients "
-                                   f"(template rows fit 2)")
-    return order, raws, outputs[0], product, needs
+                                   f"(template rows fit 3)")
+        src = {}
+        for ing in needs[n]:
+            if ing in raw_items:
+                src[ing] = ("raw", ing)
+            elif ing in by_product and order.index(by_product[ing]) < i:
+                src[ing] = ("stage", by_product[ing])
+            else:
+                raise BankInapplicable(
+                    f"stage {n} needs {ing!r} which is neither a raw input nor an "
+                    f"earlier stage's product")
+        sources[n] = src
+
+    # row assignment: farN (long arms) / nearN (normal) / nearS (normal, S face).
+    # The ADJACENT bus (previous stage's product) is physically the farN row.
+    rows: dict[str, dict] = {}
+    for i, n in enumerate(order):
+        prev = order[i - 1] if i else None
+        assign: dict = {}
+        pool = list(sources[n].items())
+        adj = next(((ing, s) for ing, s in pool
+                    if s[0] == "stage" and s[1] == prev), None)
+        if adj:
+            assign["farN"] = adj
+            pool.remove(adj)
+        pool.sort(key=lambda kv: -needs[n][kv[0]])
+        for slot in ("nearN", "farN", "nearS"):
+            if slot in assign or not pool:
+                continue
+            assign[slot] = pool.pop(0)
+        if pool:
+            raise BankInapplicable(f"stage {n}: more belt inputs than template rows")
+        rows[n] = assign
+
+    # OUTPUT-port gate: consumers = adjacent (bus at depth 1/2) + long-hauls; the
+    # arm lane reaches two rows, and a nearS input occupies depth 1.
+    cons: dict[str, set] = {n: set() for n in order}
+    for n in order:
+        for ing, (kind, src) in sources[n].items():
+            if kind == "stage":
+                cons[src].add(n)
+    for i, n in enumerate(order):
+        nxt = order[i + 1] if i + 1 < len(order) else None
+        n_ports = len([c for c in cons[n] if c != nxt]) + \
+            (1 if nxt in cons[n] else 0)
+        max_ports = 1 if rows[n].get("nearS") else 2
+        if n and n_ports > max_ports:
+            raise BankInapplicable(
+                f"stage {n} needs {n_ports} output rows (arm reach fits "
+                f"{max_ports})")
+    return order, raws, outputs[0], product, needs, sources, rows
 
 
-def _stage_slots(cap, needs, prev_prod, out_amount, last):
-    """Best per-machine arm allocation. Top face: 3 slots shared between the FAR belt
-    (long arms, 1.204) and the NEAR belt (normal, 0.9375). Bottom face: up to 3
-    output arms (0.857 each; interior stages drop on the bus with normal arms; the
-    last stage may split across two collectors -- normal + long)."""
-    ings = list(needs.items())
-    far_ing = prev_prod if prev_prod in needs else (ings[0][0] if len(ings) > 1 else None)
-    if len(ings) == 1:
-        far_ing = None
-    near_ing = next((i for i, _a in ings if i != far_ing), None)
+_ARM_RATE = {"farN": LONG_ARM_PICK, "nearN": ARM_BELT_PICK, "nearS": ARM_BELT_PICK}
+
+
+def _stage_slots(cap, needs, assign, out_amount, has_s_input):
+    """Best per-machine arm allocation for the row assignment. N face: 3 slots
+    (farN long + nearN normal). S face: 3 slots shared by nearS input arms and the
+    output arms (LONG when a nearS row exists -- they reach over it)."""
     best = None
-    for k_out in (1, 2, 3):
-        for k_far in range(0, 4):
-            k_near_max = 3 - k_far
-            for k_near in range(0, k_near_max + 1):
-                x = cap * SAFETY
-                if far_ing is not None:
-                    if k_far == 0:
+    for k_far in range(0, 4):
+        for k_near in range(0, 4 - k_far):
+            for k_sin in range(0, 3):
+                for k_out in range(1, 4 - k_sin):
+                    x = cap * SAFETY
+                    ok = True
+                    for slot, k in (("farN", k_far), ("nearN", k_near),
+                                    ("nearS", k_sin)):
+                        ing = assign.get(slot)
+                        if ing is None:
+                            if k:
+                                ok = False
+                            continue
+                        if k == 0:
+                            ok = False
+                            continue
+                        x = min(x, k * _ARM_RATE[slot] / needs[ing[0]] * SAFETY)
+                    if not ok:
                         continue
-                    x = min(x, k_far * LONG_ARM_PICK / needs[far_ing] * SAFETY)
-                elif k_far:
-                    continue
-                if near_ing is not None:
-                    if k_near == 0:
-                        continue
-                    x = min(x, k_near * ARM_BELT_PICK / needs[near_ing] * SAFETY)
-                elif k_near:
-                    continue
-                x = min(x, k_out * ARM_CHEST_PICK / out_amount * SAFETY)
-                arms = k_far + k_near + k_out
-                key = (round(x, 6), -arms)
-                if best is None or key > best[0]:
-                    best = (key, dict(k_far=k_far, k_near=k_near, k_out=k_out,
-                                      far=far_ing, near=near_ing, rate=x))
+                    out_rate = LONG_ARM_PICK if has_s_input else ARM_CHEST_PICK
+                    x = min(x, k_out * out_rate / out_amount * SAFETY)
+                    key = (round(x, 6), -(k_far + k_near + k_sin + k_out))
+                    if best is None or key > best[0]:
+                        best = (key, dict(k_far=k_far, k_near=k_near, k_sin=k_sin,
+                                          k_out=k_out, rate=x))
     if best is None:
         raise BankInapplicable("no feasible arm allocation")
     return best[1]
 
 
+# ---------------------------------------------------------------------------
+# The compiler.
+# ---------------------------------------------------------------------------
 def compile_bank(graph: Graph, dumper="auto"):
     """Compile a rate-annotated spec into a bank layout.
 
     Returns (expanded_graph, plan, layout): the expanded graph declares exactly the
-    lanes the bank realizes (bus bicliques), so the standard verifier grades it."""
+    lanes the bank realizes, so the standard verifier grades it."""
     if dumper == "auto":
         dumper = fv._fbsr_dumper()
     if dumper is None:
         raise RatesUnavailable("FBSR dumper unavailable")
-    stages, raws, out_node, product, needs = plan_chain(graph, dumper)
+    stages, raws, out_node, product, needs, sources, row_assign = \
+        plan_dag(graph, dumper)
 
     caps, out_amt = {}, {}
     for n in stages:
@@ -161,24 +235,33 @@ def compile_bank(graph: Graph, dumper="auto"):
         caps[n] = crafts
         out_amt[n] = items / crafts if crafts else 1.0
 
-    # ---- per-stage slot allocation & target -------------------------------------------
-    slots = {}
-    for i, n in enumerate(stages):
-        prev = product[stages[i - 1]] if i else None
-        slots[n] = _stage_slots(caps[n], needs[n], prev, out_amt[n],
-                                last=(i == len(stages) - 1))
+    slots = {n: _stage_slots(caps[n], needs[n], row_assign[n], out_amt[n],
+                             has_s_input="nearS" in row_assign[n])
+             for n in stages}
 
-    # unit demand: crafts of each stage per 1 item/s of final product
-    unit = {stages[-1]: 1.0 / out_amt[stages[-1]]}
-    for i in range(len(stages) - 2, -1, -1):
-        n, nxt = stages[i], stages[i + 1]
-        unit[n] = unit[nxt] * needs[nxt].get(product[n], 0.0) / out_amt[n]
-    raw_unit = {}                                # raw item -> items/s per 1 output/s
+    # ---- DAG unit demand --------------------------------------------------------------
+    consumers: dict[str, list] = {n: [] for n in stages}
     for n in stages:
-        for ing, amt in needs[n].items():
-            if ing in set(raws.values()) and ing != (product[stages[stages.index(n) - 1]] if stages.index(n) else None):
-                raw_unit[ing] = raw_unit.get(ing, 0.0) + unit[n] * amt
+        for ing, (kind, src) in sources[n].items():
+            if kind == "stage":
+                consumers[src].append((n, needs[n][ing]))
+    terminals = [n for n in stages if not consumers[n]]
+    if len(terminals) != 1:
+        raise BankInapplicable("more than one terminal stage")
+    last_stage = terminals[0]
+    unit: dict = {}
+    for n in reversed(stages):
+        if n == last_stage:
+            unit[n] = 1.0 / out_amt[n]
+        else:
+            unit[n] = sum(unit[c] * amt for c, amt in consumers[n]) / out_amt[n]
+    raw_unit: dict[str, float] = {}
+    for n in stages:
+        for ing, (kind, src) in sources[n].items():
+            if kind == "raw":
+                raw_unit[ing] = raw_unit.get(ing, 0.0) + unit[n] * needs[n][ing]
 
+    # ---- operating point ----------------------------------------------------------------
     out_rate = graph.nodes[out_node].rate
     in_rates = {raws[n]: nd.rate for n, nd in graph.nodes.items()
                 if n in raws and nd.rate is not None}
@@ -193,235 +276,311 @@ def compile_bank(graph: Graph, dumper="auto"):
         if raw_unit.get(i, 0.0) * target > cap * 1.0001:
             raise SolveError(f"input {i!r} supplies {cap}/s but the target draws "
                              f"{raw_unit[i] * target:.2f}/s")
+    if target > BELT_FULL + 1e-9:
+        raise BankInapplicable("more than one full output belt not yet supported")
 
     counts = {n: max(1, math.ceil(unit[n] * target / slots[n]["rate"]))
               for n in stages}
-    # input-driven appetite clamp: built machines pull at their slot rate, not the
-    # plan -- shed copies so a declared input is never overdrawn (<=1 partial machine)
-    for i, cap in in_rates.items():
+    for i, cap in in_rates.items():               # appetite clamp (input-driven)
         usable = cap * LANE_HEADROOM
         for n in stages:
-            amt = needs[n].get(i, 0)
+            amt = sum(needs[n][ing] for ing, (k, s) in sources[n].items()
+                      if k == "raw" and s == i)
             if amt <= 0:
                 continue
             appetite = slots[n]["rate"] / SAFETY * amt
             fit = max(1, math.ceil(usable / appetite)) if appetite else counts[n]
             counts[n] = min(counts[n], fit)
 
-    # ---- block decomposition ------------------------------------------------------------
+    # ---- long-haul lane budgets: unlike the adjacent bus (local, interleaved flow),
+    # a long-haul row carries its AGGREGATE flow through the margin -- and a
+    # drop-fed row is ONE lane (7.5/s)
+    for i, n in enumerate(stages):
+        nxt = stages[i + 1] if i + 1 < len(stages) else None
+        for c, amt in consumers[n]:
+            if c == nxt:
+                continue
+            flow = unit[c] * amt * target / max(blocks_hint(raw_unit, target), 1)
+            if flow > LANE_CAP * LANE_HEADROOM + 1e-9:
+                raise BankInapplicable(
+                    f"long-haul {n}->{c} needs {flow:.1f}/s on one drop-fed lane "
+                    f"(cap {LANE_CAP * LANE_HEADROOM:.1f})")
+
+    # ---- blocks -------------------------------------------------------------------------
     lane_usable = BELT_FULL * LANE_HEADROOM
     blocks = 1
     for ing, d in raw_unit.items():
         blocks = max(blocks, math.ceil(d * target / lane_usable))
-    out_items = target
-    collectors_total = max(1, math.ceil(out_items / LANE_CAP))
-    if collectors_total > 2 * blocks:
-        blocks = math.ceil(collectors_total / 2)
-    if out_items > BELT_FULL + 1e-9:
-        raise BankInapplicable("more than one full output belt not yet supported")
-
+    if blocks > 2:
+        raise BankInapplicable(f"{blocks} blocks (a raw item needs more than two "
+                               f"belt-rows)")
     per_block = {n: [counts[n] // blocks + (1 if b < counts[n] % blocks else 0)
                      for b in range(blocks)] for n in stages}
 
-    # ---- emit ---------------------------------------------------------------------------
-    lay = Layout()
-    g2 = Graph()
-    for n, nd in graph.nodes.items():
-        if nd.kind is NodeKind.OUTPUT:
-            g2.add_node(Node(n, nd.kind, rate=nd.rate))
+    # ---- geometry ----------------------------------------------------------------------
+    # WEST-ROOM shifts (see the positioning pass): each stage starts far enough
+    # east that its upstream producers fit west of its first machine; the row
+    # width must accommodate shift + machine count
+    consumers_pre: dict = {n: [] for n in stages}
+    for n in stages:
+        for ing, (kind, src) in sources[n].items():
+            if kind == "stage":
+                consumers_pre[src].append((n, needs[n][ing]))
+    min_slot_idx = {stages[0]: 0}
+    for i in range(1, len(stages)):
+        n, prev = stages[i], stages[i - 1]
+        room = 0
+        if any(c == n for c, _a in consumers_pre[prev]):
+            need = slots[n]["rate"] * needs[n].get(product[prev], 0.0)
+            per_prod = slots[prev]["rate"] * out_amt[prev]
+            room = math.ceil(need / per_prod) if per_prod else 0
+        min_slot_idx[n] = min_slot_idx[prev] + room
+    machines_wide = max(min_slot_idx[n] + max(per_block[n]) for n in stages)
 
-    machines_wide = max(max(per_block[n]) for n in stages)
-    # slot indices with i % 5 == 2 are POWER slots (substation columns): a substation
-    # centred in the machine band covers +-9 tiles, i.e. ~5 slots of 3 tiles
     def is_power(i):
         return i % 5 == 2
-
-    width_slots = 0
-    cap_slots = 0
+    width_slots, cap_slots = 0, 0
     while cap_slots < machines_wide:
         if not is_power(width_slots):
             cap_slots += 1
         width_slots += 1
     machine_slots = [i for i in range(width_slots) if not is_power(i)]
     power_slots = [i for i in range(width_slots) if is_power(i)]
-    if not power_slots:
-        power_slots = [width_slots]
-        width_slots += 1
 
-    def slot_x(i):                                         # left edge of slot i's body
+    def slot_x(i):
         return 2 + i * 3
-    W = slot_x(width_slots) + 3                            # east edge (power col incl.)
+    W = slot_x(width_slots) + 3
 
-    copies: dict = {n: [] for n in stages}
-    raw_rows_pending: dict = {}                            # item -> [(y, block, stage, role)]
-    input_ct = 0
+    # ---- PASS 1: row positions ----------------------------------------------------------
+    ypos: dict = {}
+    lh_links = []                                  # (src, dst, block)
+    collector_rows = []                            # (y, block)
     y = 0
-    collector_belts = []                                   # (y_row, rate)
-    sub_positions = []
-    stage_xs: dict = {}                                    # (stage, block) -> slot list
-
-    # POSITIONS: the bus flows EAST, so a machine can only feed consumers east of its
-    # drops. Consumers of the LAST stage spread uniformly; every producer stage is
-    # then placed by PREFIX DEMAND: producer k sits at (or west of) the first
-    # consumer whose cumulative draw exceeds k-1 producers' supply -- cumulative
-    # supply stays ahead of cumulative demand at every x (no positional starvation).
     for b in range(blocks):
-        last = stages[-1]
-        stage_xs[(last, b)] = [machine_slots[j]
-                               for j in _spread(per_block[last][b], len(machine_slots))]
+        for i, n in enumerate(stages):
+            a = row_assign[n]
+            r: dict = {}
+            prev = stages[i - 1] if i else None
+            adj_far = (a.get("farN") and a["farN"][1] == ("stage", prev))
+            if a.get("farN") and not adj_far:
+                r["farN"] = y
+                y += 1
+            elif adj_far:
+                r["farN"] = ypos[(prev, b)]["bus"]
+            if a.get("nearN"):
+                r["nearN"] = y
+                y += 1
+            r["arm_in"] = y
+            r["mach"] = y + 1
+            r["arm_out"] = y + 4
+            y += 5
+            if a.get("nearS"):
+                r["nearS"] = y
+                y += 1
+            nxt = stages[i + 1] if i + 1 < len(stages) else None
+            lh = sorted({c for c, _amt in consumers[n] if c != nxt})
+            if n == last_stage:
+                block_out = per_block[n][b] * slots[n]["rate"] * out_amt[n]
+                n_coll = (1 if blocks > 1
+                          else (2 if block_out > LANE_CAP + 1e-9 else 1))
+                if n_coll == 2 and a.get("nearS"):
+                    raise BankInapplicable("3-ingredient last stage above one "
+                                           "collector lane")
+                r["bus"] = y
+                for _c in range(n_coll):
+                    collector_rows.append((y, b))
+                    y += 1
+            else:
+                # long-haul rows FIRST, the adjacent bus LAST: the bus must sit
+                # directly above the next stage's rows (its consumers' long arms
+                # reach exactly two rows up)
+                for c in lh:
+                    r[("lh", c)] = y
+                    lh_links.append((n, c, b))
+                    y += 1
+                if any(c == nxt for c, _amt in consumers[n]):
+                    r["bus"] = y
+                    y += 1
+            ypos[(n, b)] = r
+        y += 3
+
+    def dst_row(src, dst, b):
+        a = row_assign[dst]
+        for slot in ("farN", "nearN", "nearS"):
+            ing = a.get(slot)
+            if ing and ing[1] == ("stage", src):
+                return ypos[(dst, b)][slot]
+        raise BankInapplicable(f"no input row on {dst} for {src}")
+
+    # ---- positions: prefix demand along adjacent buses ---------------------------------
+    # WEST ROOM: a consumer's bus pick-tiles only receive what is dropped at or
+    # west of them, so every stage must sit far enough east that its upstream
+    # producers fit west of its FIRST machine (the flow oracle caught a lone
+    # consumer pinned to the west edge starving on one arm's worth of supply).
+    stage_xs: dict = {}
+    for b in range(blocks):
+        lo = min_slot_idx[last_stage]
+        avail = machine_slots[lo:] or machine_slots
+        stage_xs[(last_stage, b)] = [avail[j] for j in _spread(
+            per_block[last_stage][b], len(avail))]
         for i in range(len(stages) - 2, -1, -1):
-            n, nxt = stages[i], stages[i + 1]
+            n = stages[i]
             nb = per_block[n][b]
-            cons = stage_xs[(nxt, b)]
-            if nb == 0 or not cons:
-                stage_xs[(n, b)] = []
+            nxt = stages[i + 1]
+            adj = any(c == nxt for c, _a in consumers[n])
+            lo = min_slot_idx[n]
+            pool = machine_slots[lo:] or machine_slots
+            if not adj or nb == 0 or (nxt, b) not in stage_xs:
+                stage_xs[(n, b)] = [pool[j] for j in _spread(nb, len(pool))]
                 continue
-            supply = slots[n]["rate"] * out_amt[n]         # items/s per producer
+            cons_xs = stage_xs[(nxt, b)]
+            supply = slots[n]["rate"] * out_amt[n]
             need = slots[nxt]["rate"] * needs[nxt].get(product[n], 0.0)
-            xs_p, acc = [], 0.0
-            ci = 0
+            xs_p, acc, ci = [], 0.0, 0
             for k in range(nb):
-                # place producer k at the slot of the first uncovered consumer
                 covered = k * supply
-                while ci < len(cons) - 1 and acc + need <= covered + 1e-9:
+                while ci < len(cons_xs) - 1 and acc + need <= covered + 1e-9:
                     acc += need
                     ci += 1
-                xs_p.append(cons[min(ci, len(cons) - 1)])
-                if ci < len(cons):
-                    acc += 0.0
-            # slots may repeat when producers outnumber consumers locally: push
-            # duplicates to the next free machine slot eastward
+                # aim one slot WEST of the covered consumer: drops must flow INTO
+                # its pick tiles, so same-slot only delivers one arm's worth
+                tgt = cons_xs[min(ci, len(cons_xs) - 1)]
+                cand = [s for s in machine_slots if s < tgt]
+                xs_p.append(cand[-1] if cand else tgt)
             seen, fixed = set(), []
             for x in xs_p:
-                while x in seen and x < machine_slots[-1]:
-                    nx = [s for s in machine_slots if s > x]
-                    x = nx[0] if nx else x
-                    if x in seen and not nx:
-                        break
+                if x in seen:                      # nearest FREE slot, east preferred
+                    free = [s for s in machine_slots if s not in seen]
+                    if not free:
+                        raise BankInapplicable("more machines than row slots")
+                    x = min(free, key=lambda s: (abs(s - x), s < x))
                 seen.add(x)
                 fixed.append(x)
             stage_xs[(n, b)] = sorted(fixed)
 
+    # ---- PASS 2: emit -------------------------------------------------------------------
+    lay = Layout()
+    g2 = Graph()
+    g2.add_node(Node(out_node, NodeKind.OUTPUT, rate=graph.nodes[out_node].rate))
+    copies: dict = {n: [] for n in stages}
+    raw_rows_pending: dict = {}
+    sub_positions = []
+    input_ct = 0
+    port_feeders: dict = {}                        # (stage, port_row) -> [copy names]
+
+    def belt_row(yy, net, x0=X_IN + 3, x1=None, direction=E):
+        for x in range(x0, x1 if x1 is not None else W):
+            lay.add(PlacedEntity(BELT, x, yy, direction=direction,
+                                 meta={"net": f"b:{net}"}))
+
     for b in range(blocks):
         for i, n in enumerate(stages):
-            sl = slots[n]
+            a = row_assign[n]
+            r = ypos[(n, b)]
             nb = per_block[n][b]
-            if nb == 0:
-                continue
-            far_src = ("bus", stages[i - 1]) if (i and sl["far"] == product[stages[i - 1]]) \
-                else (("raw", sl["far"]) if sl["far"] else None)
-            near_src = ("raw", sl["near"]) if sl["near"] else None
-            # rows for this stage
-            y_far = y if far_src else None
-            y_near = (y + 1) if far_src else y
-            if near_src is None:
-                y_near = None
-            y_arm_in = (y_near if y_near is not None else y_far) + 1
-            y_mach = y_arm_in + 1
-            y_arm_out = y_mach + 3
-            y_bus = y_arm_out + 1
-
-            # far belt: previous stage's bus already emitted at this row (see below);
-            # raw far/near belts: emit belt + west input chest/loader
-            for role, yy in (("far", y_far), ("near", y_near)):
-                src = far_src if role == "far" else near_src
-                if src is None or yy is None:
-                    continue
-                if src[0] == "raw":
-                    raw_rows_pending.setdefault(src[1], []).append((yy, b, i, role))
-                # bus rows are emitted by the PREVIOUS stage's output pass
-
-            # machines + in-arms
+            sl = slots[n]
+            for slot in ("farN", "nearN", "nearS"):
+                ing = a.get(slot)
+                if ing and ing[1][0] == "raw":
+                    raw_rows_pending.setdefault(ing[1][1], []).append(r[slot])
             xs = stage_xs[(n, b)]
+            nxt = stages[i + 1] if i + 1 < len(stages) else None
+            lh = sorted({c for c, _amt in consumers[n] if c != nxt})
+            # output ports (row per port), reach-gated in plan_dag
+            if n == last_stage:
+                ports = [yy for yy, bb in collector_rows if bb == b]
+                port_share = [1.0 / len(ports)] * len(ports)
+            else:
+                # the BUS is port 0 so its drops take face[0] -- the adjacency reach
+                # rule assumes the bus drop sits at the machine's west face; long-haul
+                # rows deliver from the east margin, so their drop x is irrelevant.
+                # Arms are dealt to ports by DEMAND share, not evenly (the flow
+                # oracle caught a 50/50 split starving the higher-demand port).
+                ports, port_share = [], []
+                if "bus" in r:
+                    ports.append(r["bus"])
+                    port_share.append(sum(unit[c] * amt for c, amt in consumers[n]
+                                          if c == nxt))
+                for c in lh:
+                    ports.append(r[("lh", c)])
+                    port_share.append(unit[c] * needs[c].get(product[n], 0.0))
+                tot = sum(port_share) or 1.0
+                port_share = [s / tot for s in port_share]
             for k in range(nb):
-                x = slot_x(xs[k])                          # left edge of the 3x3 body
+                x = slot_x(xs[k])
                 mname = f"{n}_{len(copies[n]) + 1}"
                 copies[n].append(mname)
-                proto = _MACHINE_KINDS[graph.nodes[n].kind]
                 g2.add_node(Node(mname, graph.nodes[n].kind,
                                  recipe=graph.nodes[n].recipe))
-                lay.add(PlacedEntity(proto, x, y_mach, recipe=graph.nodes[n].recipe,
+                lay.add(PlacedEntity(_MACHINE_KINDS[graph.nodes[n].kind], x,
+                                     r["mach"], recipe=graph.nodes[n].recipe,
                                      meta={"node": mname}))
-                # top arms: k_far long + k_near normal across the 3 face tiles
                 face = [x, x + 1, x + 2]
                 fi = 0
                 for _ in range(sl["k_far"]):
-                    lay.add(PlacedEntity(LONG_INSERTER, face[fi], y_arm_in, direction=N,
-                                         meta={"role": "in"}))
+                    lay.add(PlacedEntity(LONG_INSERTER, face[fi], r["arm_in"],
+                                         direction=N, meta={"role": "in"}))
                     fi += 1
                 for _ in range(sl["k_near"]):
-                    lay.add(PlacedEntity(INSERTER, face[fi], y_arm_in, direction=N,
-                                         meta={"role": "in"}))
+                    lay.add(PlacedEntity(INSERTER, face[fi], r["arm_in"],
+                                         direction=N, meta={"role": "in"}))
                     fi += 1
-            # output arms + bus/collector rows
-            last = (i == len(stages) - 1)
-            if not last:
-                for k in range(nb):
-                    x = slot_x(xs[k])
-                    face = [x, x + 1, x + 2]
-                    for j in range(sl["k_out"]):
-                        lay.add(PlacedEntity(INSERTER, face[j], y_arm_out, direction=N,
-                                             meta={"role": "out"}))
-                for x in range(-2, W):
-                    lay.add(PlacedEntity(BELT, x, y_bus, direction=E,
-                                         meta={"net": f"b:{n}"}))
-                y = y_bus                                  # next stage's far belt row
-            else:
-                # collectors: one lane per 7.5/s of block output. A second collector
-                # sits one row below, fed by LONG arms picking the machine's middle
-                # row over the first collector; the exit weave merges the two lanes.
-                block_out = nb * sl["rate"] * out_amt[n]
-                # global budget: one output belt = two lanes total. Multi-block
-                # builds get one collector each; only a single block may take two.
-                n_coll = (1 if blocks > 1
-                          else (2 if block_out > LANE_CAP + 1e-9 else 1))
-                oi = 0
-                for k in range(nb):
-                    x = slot_x(xs[k])
-                    face = [x, x + 1, x + 2]
-                    for j in range(sl["k_out"]):
-                        if n_coll == 2 and oi % 2 == 1:
-                            lay.add(PlacedEntity(LONG_INSERTER, face[j], y_arm_out,
-                                                 direction=N, meta={"role": "out"}))
-                        else:
-                            lay.add(PlacedEntity(INSERTER, face[j], y_arm_out,
-                                                 direction=N, meta={"role": "out"}))
-                        oi += 1
-                for c in range(n_coll):
-                    for x in range(-2, W):
-                        lay.add(PlacedEntity(BELT, x, y_bus + c, direction=E,
-                                             meta={"net": f"b:{n}"}))
-                    collector_belts.append(y_bus + c)
-                y = y_bus + n_coll - 1
-            # substations in the reserved power slots of EVERY stage's machine band
-            # (a substation reaches -8..+9 from its top-left; margins get their own)
+                si = 0
+                for _ in range(sl["k_sin"]):
+                    lay.add(PlacedEntity(INSERTER, face[si], r["arm_out"],
+                                         direction=S, meta={"role": "in"}))
+                    si += 1
+                for j in range(sl["k_out"]):
+                    gi = k * sl["k_out"] + j       # deal arm gi to the port whose
+                    acc, tgt = 0.0, ports[0]       # cumulative share bucket it hits
+                    frac = (gi + 0.5) / max(nb * sl["k_out"], 1)
+                    for p_i, share in enumerate(port_share):
+                        acc += share
+                        if frac <= acc + 1e-9:
+                            tgt = ports[p_i]
+                            break
+                    real_depth = tgt - r["arm_out"]
+                    proto = INSERTER if real_depth == 1 else LONG_INSERTER
+                    lay.add(PlacedEntity(proto, face[si + j], r["arm_out"],
+                                         direction=N, meta={"role": "out"}))
+                    port_feeders.setdefault((n, tgt), []).append(mname)
+            # belt rows owned by this stage
+            if "bus" in r and n != last_stage and \
+                    any(c == nxt for c, _amt in consumers[n]):
+                belt_row(r["bus"], n)
+            for c in lh:
+                belt_row(r[("lh", c)], n)
+            if a.get("farN") and a["farN"][1][0] == "stage" \
+                    and not (i and a["farN"][1][1] == stages[i - 1]):
+                pass                               # long-haul dst: emitted below
             for p in power_slots + [width_slots]:
-                sub_positions.append((slot_x(p), y_mach))
-            sub_positions.append((-8, y_mach + 1))     # west margin: powers the
-            #                                                loaders, within wire reach
-            #                                                of the field subs; the
-            #                                                descent column (-9) stays
-            #                                                one tile clear
-        y += 4                                            # gap between blocks
+                sub_positions.append((slot_x(p), r["mach"]))
+            sub_positions.append((-8, r["mach"] + 1))
 
-    # ---- raw boundaries: consolidate input belts --------------------------------------
-    # A boundary belt is loader-fed and consumed at the row ends -- it is NOT
-    # tap-drained, so it may run at 100%. When an item's total draw fits ONE belt but
-    # feeds TWO block rows, a single chest feeds a SPLITTER whose outputs run to both
-    # rows (each row then carries half its old load). Splitters preserve lane sides,
-    # which is exactly right for splitting a full two-lane feed.
-    split_ct = 0
-    for item, rows in sorted(raw_rows_pending.items()):
+    # ---- long-haul margin runs -----------------------------------------------------------
+    next_col = W + 3
+    for (src, dst, b) in lh_links:
+        y_src = ypos[(src, b)][("lh", dst)]
+        y_dst = dst_row(src, dst, b)
+        col = next_col
+        next_col += 2
+        tag = {"net": f"b:{src}"}
+        for x in range(W, col):
+            lay.add(PlacedEntity(BELT, x, y_src, direction=E, meta=tag))
+        lay.add(PlacedEntity(BELT, col, y_src, direction=S, meta=tag))
+        for yv in range(y_src + 1, y_dst):
+            lay.add(PlacedEntity(BELT, col, yv, direction=S, meta=tag))
+        lay.add(PlacedEntity(BELT, col, y_dst, direction=W_DIR, meta=tag))
+        for x in range(col - 1, X_IN + 2, -1):
+            lay.add(PlacedEntity(BELT, x, y_dst, direction=W_DIR, meta=tag))
+
+    # ---- raw boundaries ------------------------------------------------------------------
+    for item, rows_y in sorted(raw_rows_pending.items()):
         demand = raw_unit.get(item, 0.0) * target
         n_boundary = max(1, math.ceil(demand / BELT_FULL))
-        near_only = all(role == "near" for _y, _b, _i, role in rows)
-        if n_boundary == 1 and len(rows) == 2 and near_only:
-            # near rows sit directly above their arm lane, so the two margin rows
-            # below (arm lane + machine band, empty west of the field) host the
-            # U-turn; a FAR-row consolidation would collide with the near belt
-            split_ct += 1
-            y0 = min(r[0] for r in rows)
-            y1 = max(r[0] for r in rows)
+        rows_y = sorted(set(rows_y))
+        if n_boundary == 1 and len(rows_y) == 2:
+            y0, y1 = rows_y
             input_ct += 1
             iname = f"in_{item}_{input_ct}"
             g2.add_node(Node(iname, NodeKind.INPUT, item=item))
@@ -431,15 +590,13 @@ def compile_bank(graph: Graph, dumper="auto"):
             lay.add(PlacedEntity(LOADER, X_IN + 1, y0, direction=E,
                                  loader_type="output", meta=tag_i))
             lay.add(PlacedEntity(SPLITTER, X_IN + 3, y0, direction=E, meta=tag_i))
-            # branch 1: straight east into row y0
             for x in range(X_IN + 4, W):
                 lay.add(PlacedEntity(BELT, x, y0, direction=E, meta=tag_i))
-            # branch 2: U-turn west through the free margin rows (curves keep both
-            # lanes), descend the column west of the chest line, re-enter row y1
             dcol = X_IN - 3
             lay.add(PlacedEntity(BELT, X_IN + 4, y0 + 1, direction=E, meta=tag_i))
             lay.add(PlacedEntity(BELT, X_IN + 5, y0 + 1, direction=S, meta=tag_i))
-            lay.add(PlacedEntity(BELT, X_IN + 5, y0 + 2, direction=W_DIR, meta=tag_i))
+            lay.add(PlacedEntity(BELT, X_IN + 5, y0 + 2, direction=W_DIR,
+                                 meta=tag_i))
             for x in range(X_IN + 4, dcol, -1):
                 lay.add(PlacedEntity(BELT, x, y0 + 2, direction=W_DIR, meta=tag_i))
             lay.add(PlacedEntity(BELT, dcol, y0 + 2, direction=S, meta=tag_i))
@@ -448,46 +605,44 @@ def compile_bank(graph: Graph, dumper="auto"):
             lay.add(PlacedEntity(BELT, dcol, y1, direction=E, meta=tag_i))
             for x in range(dcol + 1, W):
                 lay.add(PlacedEntity(BELT, x, y1, direction=E, meta=tag_i))
-            for yy, b, i, role in rows:
-                copies[("rawrow", b, i, role)] = iname
+            raw_rows_pending[item] = {"iname": iname}
         else:
-            for yy, b, i, role in rows:
+            names = {}
+            for yy in rows_y:
                 input_ct += 1
                 iname = f"in_{item}_{input_ct}"
                 g2.add_node(Node(iname, NodeKind.INPUT, item=item))
                 lay.add(PlacedEntity(CHEST_INPUT, X_IN, yy, item=item,
                                      meta={"node": iname}))
                 lay.add(PlacedEntity(LOADER, X_IN + 1, yy, direction=E,
-                                     loader_type="output", meta={"net": f"b:{iname}"}))
-                for x in range(X_IN + 3, W):
-                    lay.add(PlacedEntity(BELT, x, yy, direction=E,
-                                         meta={"net": f"b:{iname}"}))
-                copies[("rawrow", b, i, role)] = iname
+                                     loader_type="output",
+                                     meta={"net": f"b:{iname}"}))
+                belt_row(yy, iname)
+                names[yy] = iname
+            raw_rows_pending[item] = {"rows": names}
 
-    # ---- merge collectors -> single output belt -> chest --------------------------------
-    last_stage = stages[-1]
+    # ---- collectors + exit weave ----------------------------------------------------------
     tag = {"net": f"b:{last_stage}"}
-    ys = sorted(collector_belts)
+    ys = sorted(yy for yy, _b in collector_rows)
     if len(ys) > 2:
-        raise BankInapplicable("more than two collector lanes (one output belt "
-                               "carries two sides)")
+        raise BankInapplicable("more than two collector lanes")
+    for yy in ys:
+        belt_row(yy, last_stage)
     out_y = ys[0]
-    end_x = W + 6
+    # the weave column sits EAST of every long-haul column (its climb crosses many
+    # rows; nothing else may live there), and the output belt extends to meet it
+    weave_col = next_col + 1
+    end_x = (weave_col + 3) if len(ys) == 2 else W + 6
     for x in range(W, end_x):
         lay.add(PlacedEntity(BELT, x, out_y, direction=E, meta=tag))
     if len(ys) == 2:
-        # LANE WEAVE: inserter drops ride the collector's far (south) lane, and a
-        # side-load fills the lane on the ENTRY side -- so a plain merge or a
-        # SPLITTER (which preserves lane sides) still caps the output at one lane.
-        # Collector 2 instead tunnels UNDER the output row and side-loads from the
-        # NORTH, landing its items on the empty north lane: a full two-lane belt.
         yy = ys[1]
-        col = W + 1
+        col = weave_col
         for x in range(W, col):
             lay.add(PlacedEntity(BELT, x, yy, direction=E, meta=tag))
-        if yy > out_y + 1:                        # adjacent collectors: the UG
+        if yy > out_y + 1:
             lay.add(PlacedEntity(BELT, col, yy, direction=N, meta=tag))
-            for yv in range(out_y + 2, yy):       # entrance IS the climb tile
+            for yv in range(out_y + 2, yy):
                 lay.add(PlacedEntity(BELT, col, yv, direction=N, meta=tag))
         lay.add(PlacedEntity(UNDERGROUND, col, out_y + 1, direction=N,
                              ug_type="input", meta=tag))
@@ -499,42 +654,63 @@ def compile_bank(graph: Graph, dumper="auto"):
     lay.add(PlacedEntity(LOADER, end_x, out_y, direction=E, loader_type="input",
                          meta=tag))
     lay.add(PlacedEntity(CHEST_OUTPUT, end_x + 2, out_y, meta={"node": out_node}))
+    if end_x > slot_x(width_slots) + 9:            # exit beyond the field's power
+        sub_positions.append((end_x, out_y + 2))
 
-    # ---- power + boundary ---------------------------------------------------------------
+    # ---- power ---------------------------------------------------------------------------
     seen_sub = set()
     for sx_, sy_ in sub_positions:
-        key = (sx_, sy_)
-        if key in seen_sub:
+        if (sx_, sy_) in seen_sub:
             continue
-        seen_sub.add(key)
+        seen_sub.add((sx_, sy_))
         lay.add(PlacedEntity(SUBSTATION, sx_, sy_, meta={}))
     if sub_positions:
         lay.add(PlacedEntity(EEI, X_IN - 1, min(s[1] for s in sub_positions) - 7,
-                             meta={}))                     # same line as the inputs,
-        #                                                    above the build
+                             meta={}))
 
-    # ---- expanded spec edges (what the layout physically realizes) ----------------------
-    raw_rows = {k: v for k, v in copies.items() if isinstance(k, tuple)}
+    # ---- expanded spec edges ---------------------------------------------------------------
     for b in range(blocks):
         for i, n in enumerate(stages):
-            sl = slots[n]
+            a = row_assign[n]
             block_copies = _block_slice(copies[n], per_block[n], b)
-            for role in ("far", "near"):
-                iname = raw_rows.get(("rawrow", b, i, role))
-                if iname:
+            for slot in ("farN", "nearN", "nearS"):
+                ing = a.get(slot)
+                if not ing:
+                    continue
+                if ing[1][0] == "raw":
+                    reg = raw_rows_pending[ing[1][1]]
+                    iname = reg.get("iname") or reg["rows"][ypos[(n, b)][slot]]
                     for c in block_copies:
                         g2.add_edge(iname, c)
-            if i and sl["far"] == product[stages[i - 1]]:
-                prev = stages[i - 1]
-                pxs = stage_xs[(prev, b)]
-                cxs = stage_xs[(n, b)]
-                for pj, p in enumerate(_block_slice(copies[prev], per_block[prev], b)):
-                    for cj, c in enumerate(block_copies):
-                        # the bus flows EAST: p reaches c iff p's westmost drop tile
-                        # is at or west of c's eastmost pick tile
-                        if slot_x(pxs[pj]) <= slot_x(cxs[cj]) + sl["k_far"] - 1:
-                            g2.add_edge(p, c)
-    for c in copies[stages[-1]]:
+                else:
+                    src = ing[1][1]
+                    src_copies = _block_slice(copies[src], per_block[src], b)
+                    # only copies that actually have an arm on this port feed it
+                    # (arms are recorded under the SOURCE's port row: the bus row for
+                    # adjacent consumers, the source-side lh row for long-hauls)
+                    src_r = ypos[(src, b)]
+                    port_row = src_r["bus"] if ("bus" in src_r and
+                                                ypos[(n, b)][slot] == src_r["bus"]) \
+                        else src_r.get(("lh", n))
+                    feeders = set(port_feeders.get((src, port_row), []))
+                    adjacent = (i and src == stages[i - 1] and slot == "farN")
+                    if adjacent:
+                        pxs, cxs = stage_xs[(src, b)], stage_xs[(n, b)]
+                        k_far = slots[n]["k_far"]
+                        for pj, p in enumerate(src_copies):
+                            if p not in feeders:
+                                continue
+                            for cj, c in enumerate(block_copies):
+                                if slot_x(pxs[pj]) <= slot_x(cxs[cj]) + \
+                                        max(k_far - 1, 0):
+                                    g2.add_edge(p, c)
+                    else:                          # long-haul: full supply arrives
+                        for p in src_copies:       # at the row's east end
+                            if p not in feeders:
+                                continue
+                            for c in block_copies:
+                                g2.add_edge(p, c)
+    for c in copies[last_stage]:
         g2.add_edge(c, out_node)
 
     plan = {
@@ -542,21 +718,19 @@ def compile_bank(graph: Graph, dumper="auto"):
         "target_per_s": {out_node: round(target, 4)},
         "machines": {n: {"copies": counts[n],
                          "per_copy_crafts_per_s": round(slots[n]["rate"], 4),
-                         "arms": {k: slots[n][k] for k in ("k_far", "k_near", "k_out")}}
+                         "arms": {k: slots[n][k]
+                                  for k in ("k_far", "k_near", "k_sin", "k_out")}}
                      for n in stages},
         "blocks": blocks,
-        "collectors": len(collector_belts),
+        "collectors": len(ys),
         "expected_actual_per_s": {out_node: round(_expected(
-            stages, counts, slots, out_amt, unit, raw_unit, in_rates,
-            len(collector_belts)), 4)},
+            stages, counts, slots, out_amt, unit, raw_unit, in_rates, len(ys)), 4)},
     }
     return g2, plan, lay
 
 
 def _expected(stages, counts, slots, out_amt, unit, raw_unit, in_rates, n_coll):
-    """Physical equilibrium estimate: min over stage capacities, declared raw
-    supplies and collector lanes, in final-product units."""
-    lim = n_coll * LANE_CAP
+    lim = min(n_coll * LANE_CAP, BELT_FULL)
     for n in stages:
         cap = counts[n] * (slots[n]["rate"] / SAFETY) * out_amt[n]
         per_out = unit[n] * out_amt[n]
@@ -569,7 +743,6 @@ def _expected(stages, counts, slots, out_amt, unit, raw_unit, in_rates, n_coll):
 
 
 def _spread(nb, width_slots):
-    """Evenly pace nb machines across width_slots (keeps bus flow local)."""
     if nb >= width_slots:
         return list(range(nb))
     return [round(k * (width_slots - 1) / max(nb - 1, 1)) for k in range(nb)] \
