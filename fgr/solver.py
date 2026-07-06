@@ -34,13 +34,9 @@ from __future__ import annotations
 import math
 
 from .ir import Graph, Node, NodeKind
-from .rates import RatesUnavailable, _ingredients, _machine_cap
+from .rates import (ARM_BELT_PICK, ARM_CHEST_PICK, BELT_FULL, RatesUnavailable,
+                    _ingredients, _machine_cap)
 from . import fbsr_validation as fv
-
-# --- calibrated primitives (measured in-game; scripts/rate_study.py, 2.0.77) -------
-ARM_BELT_PICK = 0.9375   # inserter, compressed belt -> machine/chest   (60/64 ticks)
-ARM_CHEST_PICK = 0.857   # inserter, chest/machine -> anything          (60/70 ticks)
-BELT_FULL = 15.0         # loader-fed belt, both lanes
 K_IN = 3                 # max input arms per ingredient per machine
 K_OUT = 2                # max output arms per machine (each = a port-subnet)
 SAFETY = 0.95            # sizing headroom: run machines at <=95% of the binding cap

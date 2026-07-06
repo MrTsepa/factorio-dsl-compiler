@@ -9,7 +9,7 @@ The model (documented limits in docs/RATES.md):
 * machine cap  = crafting_speed / energy_required * result_amount   [items/s]
 * belt lane    = proto speed * 60 ticks * 8 items/tile / 2 lanes    [7.5/s yellow]
 * loader       = full belt (both lanes)                              [15/s yellow]
-* inserter     = one item per full swing = rotation_speed * 60      [~0.84/s stack 1]
+* inserter     = game-measured swing (ticks are quantized; see calibration below)
 * fluids (2.0) = segment model: uncapacitated at our scale
 
 A backward demand pass over the DAG yields, for each output chest, how hard every
@@ -159,10 +159,20 @@ def analyze(graph: Graph, layout: Layout | None = None, dumper="auto") -> dict:
     return report
 
 
+# --- calibrated primitives, measured in-game (scripts/rate_study.py, 2.0.77) --------
+# The game QUANTIZES inserter swings to whole ticks, so the analytic formula
+# (rotation_speed x 60) chronically under-predicts: a plain inserter measures
+# 60/70 ticks = 0.857/s from a chest and 60/64 = 0.9375/s off a compressed belt.
+# See docs/rate_analysis.html. The solver imports these too -- one source of truth.
+ARM_BELT_PICK = 0.9375   # inserter, belt -> machine/chest
+ARM_CHEST_PICK = 0.857   # inserter, chest/machine -> anything
+LONG_ARM_PICK = 1.204    # long-handed inserter (60/50 ticks, chest -> chest)
+BELT_FULL = 15.0         # loader-fed belt, both lanes
+
+
 def _link_caps(dumper):
     belt = _dump("transport-belt", "entity", dumper).get("speed", 0.03125) * 60 * 8
-    swing = {p: _dump(p, "entity", dumper).get("rotation_speed", 0.014) * 60
-             for p in (INSERTER, LONG_INSERTER)}
+    swing = {INSERTER: ARM_BELT_PICK, LONG_INSERTER: LONG_ARM_PICK}
     return belt, swing        # belt = FULL belt items/s; swing = items/s per arm
 
 
