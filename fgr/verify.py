@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 
 from .ir import DIR_DELTA, OPPOSITE, Graph, NodeKind
 from .layout import (ASSEMBLER, BELT, CHEMICAL, CHEST_INPUT, CHEST_OUTPUT, EEI,
-                     FLUID_SOURCE, FURNACE, INSERTER, LOADER, PIPE, PIPE_TO_GROUND,
+                     FLUID_SOURCE, FURNACE, INSERTER, LOADER, LONG_INSERTER, PIPE, PIPE_TO_GROUND,
                      PIPE_UG_GAP, SPLITTER, SUBSTATION, TANK, UG_MAX_GAP, UNDERGROUND,
                      Layout, PlacedEntity, _fluid_connections)
 from .power import POWERED
@@ -226,11 +226,13 @@ def _flow_edges(layout: Layout, carrier_at: dict, trans_at: dict, bodies: dict, 
         return not (cid is not None and cid[0] == "body" and bodies[cid[1]].proto in (TANK, FLUID_SOURCE))
 
     for e in layout.entities:
-        if e.proto == INSERTER:
+        if e.proto in (INSERTER, LONG_INSERTER):
+            reach = 2 if e.proto == LONG_INSERTER else 1
             dx, dy = DIR_DELTA[e.direction]
-            # an inserter's `direction` points at its PICKUP; it drops on the far side
-            pick = carrier_at.get((e.x + dx, e.y + dy))
-            drop = carrier_at.get((e.x - dx, e.y - dy))
+            # an inserter's `direction` points at its PICKUP; it drops on the far
+            # side; a long-handed inserter does both at distance TWO
+            pick = carrier_at.get((e.x + reach * dx, e.y + reach * dy))
+            drop = carrier_at.get((e.x - reach * dx, e.y - reach * dy))
             if pick is None or drop is None or not item_carrier(pick) or not item_carrier(drop):
                 dangling.append((e.x, e.y))
                 continue

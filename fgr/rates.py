@@ -168,6 +168,9 @@ ARM_BELT_PICK = 0.9375   # inserter, belt -> machine/chest
 ARM_CHEST_PICK = 0.857   # inserter, chest/machine -> anything
 LONG_ARM_PICK = 1.204    # long-handed inserter (60/50 ticks, chest -> chest)
 BELT_FULL = 15.0         # loader-fed belt, both lanes
+LANE_CAP = 7.5           # ONE side of a belt. Inserters drop on the FAR lane only, so
+#                          a collector belt fed by inserter drops carries at most one
+#                          lane's worth regardless of how many machines feed it.
 
 
 def _link_caps(dumper):

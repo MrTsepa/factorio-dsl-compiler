@@ -292,16 +292,20 @@ SHOWCASE = [
 
 
 SIZED_BLURBS = {
-    "gears_belt": "INPUT-driven: <b>one belt of iron in — max gears out.</b> Five "
-        "machines, each fed by THREE iron arms and drained by TWO output arms — "
-        "multi-inserter feeds sized by the solver, planned to 92% of the belt so no "
-        "machine permanently starves (measured: every machine at 84–100% duty).",
+    "gears_belt": "INPUT-driven: <b>one belt of iron in — max gears out.</b> A "
+        "5-machine bank row, each machine fed by THREE iron arms and drained by TWO "
+        "output arms, planned to 92% of the belt so no machine permanently starves. "
+        "Measured 6.72/s with the first gear at 19 seconds — 94 entities.",
     "circuits_1ps": "OUTPUT-driven, two stages: <b>1 electronic circuit / second.</b> "
         "Circuits eat 3 cables per craft, so both stages go multi-copy and each circuit "
         "machine gets its own dedicated cable lane — multi-arm feeding expressed as "
         "separate same-product lanes.",
-    "redsci_15": "OUTPUT-driven at scale: <b>1.5 red science / second</b> — 11 science "
-        "assemblers fed by a 4-machine gear bank, input belt count derived.",
+    "redsci_15": "OUTPUT-driven at scale: <b>1.5 red science / second</b>. As a bank: "
+        "gear machines positioned by PREFIX DEMAND along the bus (a producer placed "
+        "after its consumers starves them — the positional physics, handled at "
+        "placement). Measured <b>1.65/s — exactly the predicted equilibrium — with "
+        "the first pack at 40 seconds</b>; the routed version was still ramping "
+        "toward it after 40 minutes.",
     "greensci_05": "DEEP CHAIN, six stages: <b>0.5 green science / second</b> — shared "
         "iron, reconvergent gears. The honest one: measured throughput lands at ~66% of "
         "plan because multi-column nets still route interior tap arms (splitter support "
@@ -310,10 +314,13 @@ SIZED_BLURBS = {
         "arrives by pipe (2.0 segments are uncapacitated), so only the plants and the "
         "item feeds needed sizing.",
     "greenchips_belt": "THE SCALE TEST: <b>a full yellow belt (15/s) of electronic "
-        "circuits</b> from an eight-line spec. Multi-arm sizing (3 cable arms per "
-        "circuit machine, 2 output ports per cable machine) cut the first attempt's "
-        "107 machines to <b>45</b> and halved the entity count — machine counts now "
-        "reflect what smart hand-builds achieve with multiple inserters.",
+        "circuits</b> from an eight-line spec, compiled by the BANK generator: "
+        "sandwich rows with belts as local buses, machines positioned by prefix "
+        "demand, and a lane WEAVE at the exit (a merge that fills BOTH belt sides — "
+        "splitters preserve lane sides, so the second collector tunnels under and "
+        "side-loads from the north). <b>613 entities</b> (was 12,000 routed "
+        "point-to-point), measured <b>14.43/s steady</b>, first circuit at 31 "
+        "seconds, zero idle machines.",
 }
 
 
@@ -331,13 +338,19 @@ def sized_cards():
     for p in sorted((ROOT / "examples" / "sized").glob("*.fgr")):
         text = p.read_text()
         g = parse(text)
+        lay = None
         try:
-            g2, plan = solve(g)
+            from fgr.layout_bank import BankInapplicable, compile_bank
+            try:
+                g2, plan, lay = compile_bank(g)
+            except BankInapplicable:
+                g2, plan = solve(g)
         except (RatesUnavailable, Exception) as ex:      # noqa: BLE001
             print(f"  ! sized {p.stem}: {ex}")
             continue
         rec = process(p.stem, text, render=False)
-        lay = compile_graph(g2)
+        if lay is None:
+            lay = compile_graph(g2)
         rep2 = verify(g2, lay)
         rec["status"] = "PASS" if rep2.ok else "VERIFY-FAIL"
         rec["checks"] = [(c.name, c.ok, c.detail, c.severity) for c in rep2.checks]
@@ -352,7 +365,7 @@ def sized_cards():
         for n, m in plan["machines"].items():
             desc_lines.append(f"{n}: {m['copies']}x ({m['binding']}-bound)")
         desc_lines.append("input lanes: " + ", ".join(
-            f"{k}x{v}" for k, v in plan["input_lanes"].items()))
+            f"{k}x{v}" for k, v in plan.get("input_lanes", {}).items()))
         rec["bp"] = to_blueprint_string(lay, p.stem, description="\n".join(desc_lines))
         try:
             from fgr.render import render_blueprint_string
@@ -375,10 +388,16 @@ def plan_html(rec):
         return ""
     rows = []
     for n, m in plan["machines"].items():
+        if "binding" in m:
+            how = f"{esc(m['binding'])}-bound"
+        else:                                    # bank plan: explicit arm allocation
+            a = m.get("arms", {})
+            how = (f"arms {a.get('k_far', 0)}L+{a.get('k_near', 0)}N in / "
+                   f"{a.get('k_out', 0)} out")
         rows.append(f"<tr><td class='mono'>{esc(n)}</td><td>{m['copies']}×</td>"
                     f"<td>{m['per_copy_crafts_per_s']}/s each</td>"
-                    f"<td>{esc(m['binding'])}-bound</td></tr>")
-    lanes = ", ".join(f"{esc(k)} ×{v}" for k, v in plan["input_lanes"].items())
+                    f"<td>{how}</td></tr>")
+    lanes = ", ".join(f"{esc(k)} ×{v}" for k, v in plan.get("input_lanes", {}).items())
     tgt = []
     for o, t in plan["target_per_s"].items():
         e = plan["expected_actual_per_s"].get(o)

@@ -34,8 +34,8 @@ from __future__ import annotations
 import math
 
 from .ir import Graph, Node, NodeKind
-from .rates import (ARM_BELT_PICK, ARM_CHEST_PICK, BELT_FULL, RatesUnavailable,
-                    _ingredients, _machine_cap)
+from .rates import (ARM_BELT_PICK, ARM_CHEST_PICK, BELT_FULL, LANE_CAP,
+                    RatesUnavailable, _ingredients, _machine_cap)
 from . import fbsr_validation as fv
 K_IN = 3                 # max input arms per ingredient per machine
 K_OUT = 2                # max output arms per machine (each = a port-subnet)
@@ -225,8 +225,12 @@ def solve(graph: Graph, dumper="auto") -> tuple[Graph, dict]:
                 n_lanes = min(n_lanes, max(1, math.ceil(declared / BELT_FULL)))
             lanes[i] = n_lanes
 
+    # DELIVERY lanes: the belt feeding an output chest is filled by inserter drops
+    # (far lane only) -- one side, 7.5/s, NOT the full 15/s a loader-fed belt moves.
+    # Size chest count per LANE, with the same headroom rule as input lanes.
     out_total = {o: target[o] for o in outputs}
-    out_chests = {o: max(1, math.ceil(t / BELT_FULL)) for o, t in out_total.items()}
+    out_chests = {o: max(1, math.ceil(t / (LANE_CAP * LANE_HEADROOM)))
+                  for o, t in out_total.items()}
 
     # ---- build the expanded graph ---------------------------------------------------
     g2 = Graph()
@@ -338,6 +342,8 @@ def solve(graph: Graph, dumper="auto") -> tuple[Graph, dict]:
                 continue
             cap_i = lanes.get(i, 1) * BELT_FULL
             lim = min(lim, cap_i / d) if lim is not None else cap_i / d
+        deliver = out_chests.get(o, 1) * LANE_CAP   # single-lane collectors
+        lim = min(lim, deliver) if lim is not None else deliver
         expected[o] = round(lim, 4) if lim is not None else None
 
     plan = {

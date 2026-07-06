@@ -95,6 +95,12 @@ capacities come from the game-measured calibration table, not analytic formulas.
 3. *Interior tap arms on multi-column nets* (greensci -34%) and *belt transit warm-up*
    (long dedicated lanes) — placement geometry; multi-arm sizing shrank both (fewer,
    shorter lanes), bank-row placement (Stage C) is the structural fix.
+4. *Lane-blind delivery capacity* (user-caught on the 15/s circuits build): inserters
+   drop on the FAR lane only, so a collector belt fed by inserter drops carries at most
+   ONE lane (7.5/s) — a single output chest can never absorb 15/s of inserter-collected
+   product. Fixed: LANE_CAP in the calibration table; output chests sized per delivery
+   LANE (ceil(target / (7.5 x headroom))), expected_actual capped by delivery lanes.
+   Corroboration: the one-lane gears build measured 6.75/s ~= 90% of a single lane.
 
 **Sim-validated results** (headless, steadiness-tested):
 
@@ -111,7 +117,34 @@ taps — asserted by a test); (2) machines don't throttle to the plan, so the pl
 reports both the guaranteed floor (`target`) and the realizable rate
 (`expected_actual` = min stage capacity), which matched the game to the digit.
 
-## Stage C — banked layout (design)
+## Stage C — banked layout (IMPLEMENTED v1: the bank generator; sim-validated)
+
+Implementation (`fgr/layout_bank.py`, auto-selected by `fgr solve`): the classic
+sandwich template — `[far belt / near belt / arm lane / machines / arm lane / bus]`
+per stage, long-handed inserters reaching the far belt, belts as LOCAL buses (no
+cross-section carries the aggregate), machines positioned by **prefix demand** so
+cumulative supply stays ahead of cumulative demand at every x (no positional
+starvation), substation columns in reserved power slots, and a **lane weave** at the
+exit: splitters preserve lane sides, so the second collector tunnels UNDER the output
+row and side-loads from the north — filling both lanes of a single output belt.
+
+Grounding: `fgr/flow.py` — a lane-aware static capacity analysis of the PLACED
+layout (drop-fed belts carry one side, 7.5/s; loaders/side-merges two) — gates every
+`fgr solve`: a blueprint is refused if the placed hardware cannot carry the target.
+
+**Sim-validated (headless):**
+
+| case | layout | entities | measured | first item |
+|---|---|---|---|---|
+| 15/s circuits | routed (v3) | 12,086 | 4.9/s @ 20 min, still ramping | ~20 min |
+| 15/s circuits | **bank** | **613** | **14.43/s steady (96%)** | **31 s** |
+| 1.5/s red science | routed (v3) | 476 | ~1.59/s after 40 min, ramping | minutes |
+| 1.5/s red science | **bank** | **275** | **1.65/s — the predicted equilibrium** | **40 s** |
+| max gears, 1 belt | **bank** | 94 | 6.72/s | 19 s |
+
+Open (bank v2): fluids, >2 item ingredients per stage (greensci), non-adjacent stage
+deps, more than one output belt, closing the last ~4% on the 15/s build (block ratio
+asymmetry).
 
 The layout engine learns to place a node with `count = N` as a **bank**: a row/column
 of N machines sharing input belts down the seam(s) and an output belt collecting via

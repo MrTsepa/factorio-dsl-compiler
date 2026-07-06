@@ -115,19 +115,48 @@ def cmd_solve(args) -> int:
     graph = parse(text)
     from .solver import SolveError, solve
     from .rates import RatesUnavailable
+    layout = None
     try:
-        g2, plan = solve(graph)
+        if not args.no_bank:
+            from .layout_bank import BankInapplicable, compile_bank
+            try:
+                g2, plan, layout = compile_bank(graph)
+            except BankInapplicable as e:
+                print(f"# bank template not applicable ({e}); using the generic "
+                      f"solver + router", file=sys.stderr)
+        if layout is None:
+            g2, plan = solve(graph)
     except (SolveError, RatesUnavailable) as e:
         print(f"solve failed: {e}", file=sys.stderr)
         return 1
     print(f"# {args.source} — sizing plan")
     print(_json.dumps(plan, indent=2))
-    layout = _compile_graph(g2, args.generator)
+    if layout is None:
+        layout = _compile_graph(g2, args.generator)
     report = verify(g2, layout)
     print(f"\n## sized layout: {len(layout.entities)} entities — "
           f"{'VERIFIES' if report.ok else 'FAILS VERIFICATION'}")
     if not report.ok:
         print(report.format())
+        return 1
+    # ground the plan against the PLACED hardware (lane-aware static capacity)
+    from .flow import estimate
+    est = estimate(g2, layout)
+    total = {}
+    for o, v in est["outputs_per_s"].items():
+        base = o.rsplit("_", 1)[0] if o.rsplit("_", 1)[-1].isdigit() else o
+        total[base] = total.get(base, 0.0) + v
+    print("\n## placed-layout capacity (lane-aware static analysis)")
+    ok_cap = True
+    for o, t in plan["target_per_s"].items():
+        got = round(total.get(o, 0.0), 3)
+        mark = "ok" if got >= t - 1e-6 else "SHORT"
+        if got < t - 1e-6:
+            ok_cap = False
+        print(f"  {o}: {got}/s through the placed hardware vs target {t}/s [{mark}]")
+    if not ok_cap:
+        print("  !! the placed layout cannot carry the plan -- refusing the blueprint",
+              file=sys.stderr)
         return 1
     desc = "sized by fgr solve: " + ", ".join(
         f"{o} >= {t}/s (expect ~{plan['expected_actual_per_s'].get(o)}/s)"
@@ -166,6 +195,8 @@ def main(argv=None) -> int:
     s = sub.add_parser("solve", help="size a factory to its @rate annotations -> sized blueprint")
     s.add_argument("source")
     s.add_argument("-g", "--generator", choices=sorted(GENERATORS), default=DEFAULT_GENERATOR)
+    s.add_argument("--no-bank", action="store_true",
+                   help="skip the bank template; always use the generic router")
     s.set_defaults(func=cmd_solve)
 
     r = sub.add_parser("rates", help="steady-state throughput estimate for a .fgr file")
