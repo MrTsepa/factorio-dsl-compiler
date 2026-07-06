@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""Render EVERY case (examples/ AND corner_cases/, passing AND failing) full-size via
-FBSR, stamp each with its verifier verdict + error context, and assemble one multi-page
-PDF for review.
+"""Assemble a shareable PDF of CURATED cases (one page per case: verdict + error
+context + DSL over a full-resolution render). Any sampled case that fails shows its
+failing checks prominently -- the PDF is presentation, the corpus runner is the gate.
 
     export FBSR_HOME=/path/to/Factorio-FBSR/FactorioBlueprintStringRenderer
-    .venv/bin/python scripts/build_pdf.py                  # -> out/all_cases.pdf (155 cases)
-    .venv/bin/python scripts/build_pdf.py 3                # only first 3 cases (quick test)
-    .venv/bin/python scripts/build_pdf.py --examples-only  # skip corner_cases/
+    .venv/bin/python scripts/build_pdf.py                  # curated sample -> out/all_cases.pdf
+    .venv/bin/python scripts/build_pdf.py --all            # every case (examples + corner_cases)
+    .venv/bin/python scripts/build_pdf.py 3                # first 3 of the selection
 
 One page per case: a header band (name, PASS/FAIL/ERROR, every failing check with detail,
 plus the DSL spec) above the full-resolution layout render. A cover page summarises the
@@ -174,7 +174,8 @@ def _cover(recs):
     for r in recs:
         by_suite.setdefault("/".join(r["rel"].split("/")[:-1]), []).append(r)
     npass = sum(r["status"] == "PASS" for r in recs)
-    lines = [("TITLE", f"fgr — all {len(recs)} cases   ({npass}/{len(recs)} verify)"),
+    scope = "all" if "--all" in sys.argv else "curated sample:"
+    lines = [("TITLE", f"fgr — {scope} {len(recs)} cases   ({npass}/{len(recs)} verify)"),
              ("BODY", time.strftime("generated %Y-%m-%d %H:%M")), ("BODY", "")]
     for suite in sorted(by_suite):
         rs = by_suite[suite]
@@ -205,12 +206,32 @@ def _cover(recs):
     return page
 
 
+# The curated sample: escalating complexity, fluids, fan-in, reconvergence, one giant.
+SAMPLE = [
+    "examples/basic/gears.fgr",            # hello world
+    "examples/basic/bus.fgr",              # one belt, many taps (no splitters)
+    "examples/basic/circuits.fgr",         # two-ingredient assembler
+    "examples/basic/merge.fgr",            # multi-tap merge
+    "examples/complex/processing_unit.fgr",   # reconvergence + acid
+    "examples/complex/sulfuric_acid.fgr",     # chemistry + fluids
+    "examples/complex/flying_robot_frame.fgr",  # deep multi-step, two fluids
+    "examples/complex/wide_reconverge.fgr",     # 8 products into one chest (lane pairs)
+    "examples/stress/fluids_3.fgr",        # generated fluid web
+    "examples/stress/highfanin_2.fgr",     # high fan-in
+    "examples/stress/deepchain_4.fgr",     # depth-14 spine
+    "examples/stress/science_3.fgr",       # the showpiece science factory
+    "examples/stress/scale_2.fgr",         # a giant, for scale
+]
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     limit = int(args[0]) if args else None
-    cases = sorted((ROOT / "examples").glob("*/*.fgr"))
-    if "--examples-only" not in sys.argv:
+    if "--all" in sys.argv:
+        cases = sorted((ROOT / "examples").glob("*/*.fgr"))
         cases += sorted((ROOT / "corner_cases").glob("*/*.fgr"))
+    else:
+        cases = [ROOT / rel for rel in SAMPLE]
     if limit:
         cases = cases[:limit]
     recs = []

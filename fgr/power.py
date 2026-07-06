@@ -226,10 +226,16 @@ def _bridge(subs, free, claim):
         dist = ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5   # Euclidean: wire reach is
         step = min(PITCH, dist - 1) / dist if dist else 0  # radial, not Chebyshev
         ideal = (round(ax + (bx - ax) * step), round(ay + (by - ay) * step))
-        cand = [(ideal[0] + dx, ideal[1] + dy) for dx in range(-SNAP, SNAP + 1)
-                for dy in range(-SNAP, SNAP + 1)]
+        # search a WIDE window around the ideal point: relays often need to sit just
+        # outside a machine-halo band, well beyond the lattice snap distance (a tight
+        # window here once left long chains as several dark islands)
+        cand = [(ideal[0] + dx, ideal[1] + dy) for dx in range(-8, 9)
+                for dy in range(-8, 9)]
         cand.sort(key=lambda s: (abs(s[0] - ideal[0]) + abs(s[1] - ideal[1]), s))
-        relay = next((s for s in cand if free(s) and _wired(subs[a], s)), None)
+        ok_a = [s for s in cand if free(s) and _wired(subs[a], s)]
+        relay = next((s for s in ok_a if _wired(s, subs[b])), None)  # one-hop finish
+        if relay is None:
+            relay = ok_a[0] if ok_a else None    # step toward b; next pass continues
         if relay is None:
             break                            # can't bridge; verifier will report it
         subs.append(relay)
@@ -255,17 +261,30 @@ def patch_power(layout: Layout, plan) -> list:
             and not any(_supply_covers(s, e.tiles()) for s in subs)]
     if not dark:
         return plan
-    for e in sorted(dark, key=lambda e: (e.y, e.x)):
-        if any(_supply_covers(s, e.tiles()) for s in subs):
-            continue                           # an earlier patch already covers it
-        tx, ty = e.tiles()[0]
-        cand = [(tx + dx, ty + dy) for dx in range(-9, 9) for dy in range(-9, 9)]
-        cand.sort(key=lambda s: (min((abs(s[0] - o[0]) + abs(s[1] - o[1]) for o in subs),
-                                     default=0), s))
-        spot = next((s for s in cand if free(s) and _supply_covers(s, e.tiles())), None)
-        if spot is not None:
-            subs.append(spot)
-            claim(spot)
+    # mini set cover over the dark entities: each patch substation is placed where it
+    # covers the MOST still-dark entities (one sub per dark tap scattered poles
+    # everywhere), tie-broken toward the existing network
+    while dark:
+        tx, ty = dark[0].tiles()[0]
+        best = None
+        for dx in range(-9, 9):
+            for dy in range(-9, 9):
+                s = (tx + dx, ty + dy)
+                if not free(s) or not _supply_covers(s, dark[0].tiles()):
+                    continue
+                ncov = sum(1 for e in dark if _supply_covers(s, e.tiles()))
+                dnet = min((abs(s[0] - o[0]) + abs(s[1] - o[1]) for o in subs),
+                           default=0)
+                key = (-ncov, dnet, s)
+                if best is None or key < best[0]:
+                    best = (key, s)
+        if best is None:
+            dark.pop(0)                        # nowhere to put it; verifier reports
+            continue
+        spot = best[1]
+        subs.append(spot)
+        claim(spot)
+        dark = [e for e in dark if not _supply_covers(spot, e.tiles())]
     subs = _bridge(subs, free, claim)
     return [("sub", s) for s in subs] + [(k, s) for k, s in plan if k != "sub"]
 

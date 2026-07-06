@@ -1,5 +1,5 @@
 # Deep linear chain depth=8: iron -> 8 stages -> out.
-# STATUS (engine 8e613a8): PASS (verifies)
+# STATUS (engine 42133f5): PASS (verifies)
 
 input iron : iron-plate
 assembler s0 : iron-gear-wheel

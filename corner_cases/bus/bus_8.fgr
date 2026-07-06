@@ -1,5 +1,5 @@
 # Wide bus: iron+cable belts tapped by 8 greens and 8 gears, two merges (row-spacing stress).
-# STATUS (engine 8e613a8): PASS (verifies)
+# STATUS (engine 42133f5): PASS (verifies)
 
 input iron : iron-plate
 input cu : copper-plate

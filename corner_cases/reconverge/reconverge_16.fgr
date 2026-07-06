@@ -1,5 +1,5 @@
 # Diamond reconvergence width=16: split -> 16 parallel -> join.
-# STATUS (engine 8e613a8): PASS (verifies)
+# STATUS (engine 42133f5): PASS (verifies)
 
 input iron : iron-plate
 assembler split : iron-gear-wheel

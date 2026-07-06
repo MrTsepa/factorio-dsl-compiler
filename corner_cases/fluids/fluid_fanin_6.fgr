@@ -1,5 +1,5 @@
 # Fluid fan-in N=6: 6 same-fluid (acid) producers all pipe to ONE tank (weld risk).
-# STATUS (engine 8e613a8): PASS (verifies)
+# STATUS (engine 42133f5): PASS (verifies)
 
 fluid water : water
 chemical q0 : sulfuric-acid

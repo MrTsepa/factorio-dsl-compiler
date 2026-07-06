@@ -1427,14 +1427,16 @@ def _compile_at(graph: Graph, vgap: int) -> Layout:
     anchor = inputs if inputs else list(bodies.values())
     hint = (min(b.x for b in anchor) - 6,
             round(sum(b.y for b in anchor) / len(anchor)))
-    # coverage target: machine footprints dilated by 6 -- the ground inserters,
-    # loader assemblies and gutter taps can occupy (a fringe miss is patched after
-    # routing by patch_power)
+    # coverage target: machine footprints dilated by 3 -- inserters (<=2), loader
+    # assemblies (<=3) and most gutter taps. Wider dilation created corner slabs no
+    # consumer can occupy and greedy set cover chased those slivers with extra
+    # substations (a 3-consumer build once got 8); true outliers are patched after
+    # routing by patch_power on real ground.
     cover: set = set()
     for b in bodies.values():
         w, h = b.size
-        for tx in range(b.x - 6, b.x + w + 6):
-            for ty in range(b.y - 6, b.y + h + 6):
+        for tx in range(b.x - 3, b.x + w + 3):
+            for ty in range(b.y - 3, b.y + h + 3):
                 cover.add((tx, ty))
     pplan = plan_power(ctx.walls | halo, cover=cover, eei_hint=hint)
     ctx.walls |= power_tiles(pplan)
