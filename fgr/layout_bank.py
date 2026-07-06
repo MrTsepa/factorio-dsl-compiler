@@ -641,21 +641,56 @@ def compile_bank(graph: Graph, dumper="auto"):
             sub_positions.append((-8, r["mach"] + 1))
 
     # ---- long-haul margin runs -----------------------------------------------------------
+    # each link owns a margin column (spaced 3); horizontal runs HOP over earlier
+    # links' columns with underground belts (channel routing: a run at row y must
+    # not weld into a foreign descent crossing that row)
     next_col = W + 3
+    taken_cols: list = []                          # (col, y_lo, y_hi)
+
+    def _run_east(x0, x1, yy, tag):
+        x = x0
+        while x < x1:
+            block_col = next((c for c, lo, hi in taken_cols
+                              if c == x + 1 and lo <= yy <= hi), None)
+            if block_col is not None and x + 2 < x1:
+                lay.add(PlacedEntity(UNDERGROUND, x, yy, direction=E,
+                                     ug_type="input", meta=tag))
+                lay.add(PlacedEntity(UNDERGROUND, x + 2, yy, direction=E,
+                                     ug_type="output", meta=tag))
+                x += 3
+            else:
+                lay.add(PlacedEntity(BELT, x, yy, direction=E, meta=tag))
+                x += 1
+
+    def _run_west(x0, x1, yy, tag):
+        """West-flowing run from x0 down to x1 (exclusive)."""
+        x = x0
+        while x > x1:
+            block_col = next((c for c, lo, hi in taken_cols
+                              if c == x - 1 and lo <= yy <= hi), None)
+            if block_col is not None and x - 2 > x1:
+                lay.add(PlacedEntity(UNDERGROUND, x, yy, direction=W_DIR,
+                                     ug_type="input", meta=tag))
+                lay.add(PlacedEntity(UNDERGROUND, x - 2, yy, direction=W_DIR,
+                                     ug_type="output", meta=tag))
+                x -= 3
+            else:
+                lay.add(PlacedEntity(BELT, x, yy, direction=W_DIR, meta=tag))
+                x -= 1
+
     for (src, dst, b) in lh_links:
         y_src = ypos[(src, b)][("lh", dst)]
         y_dst = dst_row(src, dst, b)
         col = next_col
-        next_col += 2
+        next_col += 3
         tag = {"net": f"b:{src}"}
-        for x in range(W, col):
-            lay.add(PlacedEntity(BELT, x, y_src, direction=E, meta=tag))
+        _run_east(W, col, y_src, tag)
         lay.add(PlacedEntity(BELT, col, y_src, direction=S, meta=tag))
         for yv in range(y_src + 1, y_dst):
             lay.add(PlacedEntity(BELT, col, yv, direction=S, meta=tag))
         lay.add(PlacedEntity(BELT, col, y_dst, direction=W_DIR, meta=tag))
-        for x in range(col - 1, X_IN + 2, -1):
-            lay.add(PlacedEntity(BELT, x, y_dst, direction=W_DIR, meta=tag))
+        _run_west(col - 1, X_IN + 2, y_dst, tag)
+        taken_cols.append((col, min(y_src, y_dst), max(y_src, y_dst)))
 
     # ---- raw boundaries ------------------------------------------------------------------
     split_ct = 0
