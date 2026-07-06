@@ -57,9 +57,29 @@ def test_gears_bank_verifies_and_carries_target():
 
 
 def test_inapplicable_specs_fall_back():
+    # single-fluid stages bank now (battery does); TWO fluids per stage still
+    # fall back (two pipe networks per row -- sulfur-class, pending)
     from fgr.layout_bank import BankInapplicable, compile_bank
     from fgr.rates import RatesUnavailable
-    fluid_spec = parse("\n".join([
+    two_fluid = parse("\n".join([
+        "fluid water : water",
+        "fluid gas : petroleum-gas",
+        "chemical sulfur : sulfur",
+        "output out @ 0.5/s",
+        "",
+        "water ~> sulfur",
+        "gas ~> sulfur",
+        "sulfur -> out",
+    ]))
+    try:
+        with pytest.raises(BankInapplicable):
+            compile_bank(two_fluid)
+    except RatesUnavailable:
+        pytest.skip("FBSR game data unavailable")
+
+
+def test_single_fluid_stage_banks():
+    g2, plan, lay = _bank("\n".join([
         "input iron : iron-plate",
         "input copper : copper-plate",
         "fluid acid : sulfuric-acid",
@@ -71,8 +91,4 @@ def test_inapplicable_specs_fall_back():
         "acid ~> battery",
         "battery -> out",
     ]))
-    try:
-        with pytest.raises(BankInapplicable):
-            compile_bank(fluid_spec)
-    except RatesUnavailable:
-        pytest.skip("FBSR game data unavailable")
+    assert verify(g2, lay).ok
