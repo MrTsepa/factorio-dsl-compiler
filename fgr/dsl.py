@@ -29,7 +29,9 @@ from .ir import Graph, Node, NodeKind
 _NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 _PROTO = r"[A-Za-z0-9_-]+"  # Factorio item/recipe internal name
 _DECL_RE = re.compile(
-    rf"^(input|assembler|furnace|chemical|fluid|output)\s+({_NAME})\s*(?::\s*({_PROTO})\s*)?$")
+    rf"^(input|assembler|furnace|chemical|fluid|output)\s+({_NAME})\s*"
+    rf"(?::\s*({_PROTO})\s*)?"
+    rf"(?:@\s*([0-9.]+)\s*(/s|/min|belt|belts?)?\s*)?$")
 _NAME_RE = re.compile(rf"^{_NAME}$")
 
 
@@ -69,7 +71,12 @@ def parse(text: str) -> Graph:
         if not m:
             raise DslError(f"cannot parse statement: {line!r}", lineno)
         kind_s, name, proto = m.group(1), m.group(2), m.group(3)
-        node = _build_node(kind_s, name, proto, lineno)
+        rate = None
+        if m.group(4) is not None:
+            val, unit = float(m.group(4)), (m.group(5) or "/s")
+            rate = {"/s": val, "/min": val / 60.0,
+                    "belt": val * 15.0, "belts": val * 15.0}[unit]
+        node = _build_node(kind_s, name, proto, lineno, rate)
         try:
             graph.add_node(node)
         except ValueError as exc:
@@ -130,20 +137,24 @@ def _parse_fluid_statement(line: str, lineno: int, out: list) -> None:
                 out.append((s, d, lineno))
 
 
-def _build_node(kind_s: str, name: str, proto: str | None, lineno: int) -> Node:
+def _build_node(kind_s: str, name: str, proto: str | None, lineno: int,
+                rate: float | None = None) -> Node:
     kind = NodeKind(kind_s)
     needs = {NodeKind.INPUT: "an item", NodeKind.ASSEMBLER: "a recipe", NodeKind.FURNACE: "an item",
              NodeKind.CHEMICAL: "a recipe", NodeKind.FLUID: "a fluid-name"}
+    if rate is not None and kind not in (NodeKind.INPUT, NodeKind.OUTPUT):
+        raise DslError("@rate is only valid on input/output nodes (the solver sizes "
+                       "the machines in between)", lineno)
     if kind in needs:
         if not proto:
             raise DslError(f"{kind_s} {name!r} needs {needs[kind]}: `{kind_s} {name} : ...`", lineno)
         if kind in (NodeKind.INPUT, NodeKind.FLUID):
-            return Node(name, kind, item=proto)
+            return Node(name, kind, item=proto, rate=rate)
         return Node(name, kind, recipe=proto)
     # OUTPUT
     if proto:
         raise DslError(f"output {name!r} takes no item/recipe", lineno)
-    return Node(name, kind)
+    return Node(name, kind, rate=rate)
 
 
 _SOURCES = (NodeKind.INPUT, NodeKind.FLUID)

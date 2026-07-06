@@ -87,8 +87,13 @@ script.on_nth_tick(60, function(ev)
       tanks[fluid] = (tanks[fluid] or 0) + amount
     end
   end
+  local mach = {}
+  for _, m in pairs(sim.find_entities_filtered{type = {"assembling-machine", "furnace"}}) do
+    mach[string.format("%d,%d", m.position.x, m.position.y)] = m.products_finished
+  end
   storage.samples[#storage.samples + 1] = {tick = ev.tick, out = out,
-                                           chests = per_chest, fluids = tanks}
+                                           chests = per_chest, fluids = tanks,
+                                           machines = mach}
   local ghosts = sim.find_entities_filtered{name = "entity-ghost"}
   helpers.write_file("fgr-sim/result.json",
     helpers.table_to_json({samples = storage.samples, unrevived_ghosts = #ghosts}),

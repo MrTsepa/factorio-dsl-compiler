@@ -53,7 +53,7 @@ the landing page card meta line.
 What Stage A deliberately does not do: dynamics (warm-up, buffering — the "gears took a
 while to arrive" effect), belt saturation interactions, or quality/modules.
 
-## Stage B — the ratio solver (design)
+## Stage B — the ratio solver (IMPLEMENTED; sim-validated)
 
 DSL grows a target:
 
@@ -74,11 +74,28 @@ Solve on the spec graph, before layout:
 4. **Input belt count**: raw inputs get `ceil(total_draw / 15)` infinity-chest+loader
    feeds — "correct number of input belts" falls out of the same arithmetic.
 
-Output: a *sized graph* — same IR, nodes annotated with `count`, edges with `lanes`
-and `arms`. The verifier gets a new **static capacity check**: realized carrier
-capacity ≥ required flow on every lane (it already knows every carrier's identity;
-capacities come from the dumps). That keeps the oracle in charge: a layout PASSES at
-rate T only if every link physically sustains T.
+Implementation (`fgr/solver.py`, `fgr solve <file>`): the solver is a pure
+**graph → graph transform** — machine multiplicity becomes node copies, multi-arm
+feeding becomes multiple same-product source edges (one inserter each, so a copy
+never needs more than one arm per ingredient by construction), input lanes become
+replicated boundary chests, and expanded consumers are marked `no_merge` so the
+router keeps deliberate arms separate. Interior stays vanilla (BOUNDARY RULE);
+capacities come from the game-measured calibration table, not analytic formulas.
+
+**Sim-validated results** (headless, steadiness-tested):
+
+| case | mode | plan | measured | notes |
+|---|---|---|---|---|
+| gears, `iron @ 1 belt` | input-driven | 7.5/s | **7.41/s (98.8%)** | 17 arm-limited machines, one belt, zero taps |
+| red science `@ 0.45/s` | output-driven | ≥0.45, expect 0.6 | **0.60/s (100%)** | ceil() overdelivers; machines run at cap, and `expected_actual_per_s` predicted it exactly |
+
+Two lessons the sim taught during implementation: (1) a **tap arm inside a sized
+net throttles its whole subtree** — the first attempt fed 7 of 17 machines through
+one tap and they produced zero; sized graphs now place boundary chests at the END of
+their consumer span so the trunk passes every machine (direct pickups, no interior
+taps — asserted by a test); (2) machines don't throttle to the plan, so the plan
+reports both the guaranteed floor (`target`) and the realizable rate
+(`expected_actual` = min stage capacity), which matched the game to the digit.
 
 ## Stage C — banked layout (design)
 
@@ -169,7 +186,8 @@ environments without a game install.)
 ## Order of execution
 
 1. ✅ Stage A (this commit): metadata + bottleneck honesty on every blueprint.
-2. Stage B solver + verifier capacity check — pure math + oracle, no layout risk.
+2. ✅ Stage B solver — sim-validated at 99–100% of prediction (verifier
+   static-capacity check remains open).
 3. Stage C banks — behind a flag, graded case-by-case like every generator change.
 4. ✅ Stage D headless simulation — closed the loop: machine-limited predictions
    exact; inserter-limited within 2–12% (conservative by design).

@@ -62,13 +62,17 @@ class Node:
     """A vertex in the production graph.
 
     ``item`` is the stocked item for INPUT nodes; ``recipe`` is the crafted
-    recipe for ASSEMBLER nodes. OUTPUT nodes carry neither.
+    recipe for ASSEMBLER nodes. OUTPUT nodes carry neither. ``rate`` is an
+    optional throughput annotation in items/s (``@ 15/s`` in the DSL): on an
+    INPUT it declares the available supply, on an OUTPUT the demanded rate --
+    the solver (fgr.solver) sizes the factory to meet them.
     """
 
     name: str
     kind: NodeKind
     item: str | None = None
     recipe: str | None = None
+    rate: float | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +95,10 @@ class Graph:
 
     nodes: dict[str, Node] = field(default_factory=dict)
     edges: list[Edge] = field(default_factory=list)
+    # consumers whose same-product feeds must NOT be merged onto one belt: the rate
+    # solver expresses multi-arm feeding as multiple source edges, one inserter each
+    # (the BOUNDARY RULE forbids loaders on machines, so arms are the only lever)
+    no_merge: set = field(default_factory=set)
     # `A -> B, C` fan-outs: one belt off the source feeds every consumer (via
     # splitters). Each is also expanded into plain `edges` so the verifier still
     # checks (src, dst) connectivity per consumer.

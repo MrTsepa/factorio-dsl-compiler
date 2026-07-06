@@ -668,6 +668,9 @@ def _belt_targets(ctx: _Ctx, state: _State, net_id, tag, consumer, used_faces, o
         else:
             targets.setdefault(pick, []).append(("drop", f, outward, partner is not None))
     want = frozenset((consumer,))
+    if consumer in ctx.graph.no_merge:
+        return targets                    # solver-sized consumer: each supplier lane
+        #                                   is a deliberate ARM; merging collapses them
     # tiles already hosting a cross-product pair are FULL (a third feed would land on
     # one of the two occupied lanes)
     locked = {H for pm in state.plans.values() for h, H, _mt, _c in pm.merges
@@ -1339,6 +1342,19 @@ def _negotiate(ctx: _Ctx, belt_nets, fluid_nets):
 def _place(graph: Graph, vgap):
     col = _layers(graph)
     cr, _order = _assign_rows(graph, col, vgap)
+    if graph.no_merge:
+        # SIZED graphs (rate solver): a boundary input chest must enter its consumer
+        # column at the END of the span, so the trunk runs past every machine with a
+        # direct pickup. Barycenter placement centres it mid-span, which forces the
+        # tree to branch and a single tap arm then throttles half the bank (measured:
+        # 7 of 17 machines at zero).
+        from .ir import NodeKind as _NK
+        inputs = [n for n, nd in graph.nodes.items() if nd.kind is _NK.INPUT]
+        for i, n in enumerate(sorted(inputs)):
+            rows = [cr[e.dst] for e in graph.edges if e.src == n and e.dst in cr]
+            if rows:
+                cr[n] = min(rows) - 4 - 3 * i     # staggered: two chests must never
+                #                                   share a row (they'd overlap at x=0)
     fluid_sinks = {e.dst for e in graph.edges if e.fluid}
     cmax = max(col.values()) if col else 0
     item_edges = [e for e in graph.edges if not e.fluid]

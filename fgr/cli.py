@@ -109,6 +109,34 @@ def cmd_rates(args) -> int:
     return 0
 
 
+def cmd_solve(args) -> int:
+    import json as _json
+    text = Path(args.source).read_text()
+    graph = parse(text)
+    from .solver import SolveError, solve
+    from .rates import RatesUnavailable
+    try:
+        g2, plan = solve(graph)
+    except (SolveError, RatesUnavailable) as e:
+        print(f"solve failed: {e}", file=sys.stderr)
+        return 1
+    print(f"# {args.source} — sizing plan")
+    print(_json.dumps(plan, indent=2))
+    layout = _compile_graph(g2, args.generator)
+    report = verify(g2, layout)
+    print(f"\n## sized layout: {len(layout.entities)} entities — "
+          f"{'VERIFIES' if report.ok else 'FAILS VERIFICATION'}")
+    if not report.ok:
+        print(report.format())
+        return 1
+    desc = "sized by fgr solve: " + ", ".join(
+        f"{o} >= {t}/s (expect ~{plan['expected_actual_per_s'].get(o)}/s)"
+        for o, t in plan["target_per_s"].items())
+    print("\n## blueprint string")
+    print(to_blueprint_string(layout, label=Path(args.source).stem, description=desc))
+    return 0
+
+
 def cmd_validate_model(args) -> int:
     """Validate the verifier's geometric assumptions against Factorio data (via FBSR)."""
     from .fbsr_validation import FbsrUnavailable, format_checks, validate
@@ -134,6 +162,11 @@ def main(argv=None) -> int:
     c.add_argument("-g", "--generator", choices=sorted(GENERATORS), default=DEFAULT_GENERATOR,
                    help=f"layout generator to use (default: {DEFAULT_GENERATOR})")
     c.set_defaults(func=cmd_compile)
+
+    s = sub.add_parser("solve", help="size a factory to its @rate annotations -> sized blueprint")
+    s.add_argument("source")
+    s.add_argument("-g", "--generator", choices=sorted(GENERATORS), default=DEFAULT_GENERATOR)
+    s.set_defaults(func=cmd_solve)
 
     r = sub.add_parser("rates", help="steady-state throughput estimate for a .fgr file")
     r.add_argument("source")
