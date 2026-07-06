@@ -72,10 +72,13 @@ script.on_nth_tick(60, function(ev)
   local sim = game.surfaces["fgr-sim"]
   if not sim or not storage.samples then return end
   local out = {}
+  local per_chest = {}
   for _, chest in pairs(sim.find_entities_filtered{name = "steel-chest"}) do
+    local key = string.format("%d,%d", chest.position.x, chest.position.y)
     local cinv = chest.get_inventory(defines.inventory.chest)
     for _, item in pairs(cinv.get_contents()) do
       out[item.name] = (out[item.name] or 0) + item.count
+      per_chest[key] = (per_chest[key] or 0) + item.count
     end
   end
   local tanks = {}
@@ -84,7 +87,8 @@ script.on_nth_tick(60, function(ev)
       tanks[fluid] = (tanks[fluid] or 0) + amount
     end
   end
-  storage.samples[#storage.samples + 1] = {tick = ev.tick, out = out, fluids = tanks}
+  storage.samples[#storage.samples + 1] = {tick = ev.tick, out = out,
+                                           chests = per_chest, fluids = tanks}
   local ghosts = sim.find_entities_filtered{name = "entity-ghost"}
   helpers.write_file("fgr-sim/result.json",
     helpers.table_to_json({samples = storage.samples, unrevived_ghosts = #ghosts}),
@@ -135,14 +139,9 @@ class Runner:
         return p, time.time() - t0
 
 
-def simulate(fgr: Path, ticks: int, keep: bool = False) -> dict:
-    graph = parse(fgr.read_text())
-    layout = compile_graph(graph)
-    rep = verify(graph, layout)
-    if not rep.ok:
-        raise SystemExit(f"{fgr} does not verify; not simulating a broken layout")
-    bp = to_blueprint_string(layout, label=fgr.stem)
-
+def simulate_bp(bp: str, ticks: int, keep: bool = False) -> dict:
+    """Run a raw blueprint string for `ticks` and return the sampled series --
+    the micro-benchmark entry point (hand-built layouts isolate one mechanism)."""
     r = Runner()
     scen = WRITE / "scenarios" / SCENARIO
     scen.mkdir(parents=True, exist_ok=True)
@@ -170,6 +169,15 @@ def simulate(fgr: Path, ticks: int, keep: bool = False) -> dict:
     if not keep:
         shutil.rmtree(scen, ignore_errors=True)
     return data
+
+
+def simulate(fgr: Path, ticks: int, keep: bool = False) -> dict:
+    graph = parse(fgr.read_text())
+    layout = compile_graph(graph)
+    rep = verify(graph, layout)
+    if not rep.ok:
+        raise SystemExit(f"{fgr} does not verify; not simulating a broken layout")
+    return simulate_bp(to_blueprint_string(layout, label=fgr.stem), ticks, keep=keep)
 
 
 def _ols(pts):
