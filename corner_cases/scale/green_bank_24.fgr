@@ -1,5 +1,5 @@
 # Green-circuit bank N=24: TWO feed belts (iron+cable) into each of 24 assemblers.
-# STATUS (engine e4a688b): PASS (verifies)
+# STATUS (engine 8e613a8): PASS (verifies)
 
 input iron : iron-plate
 input cu : copper-plate

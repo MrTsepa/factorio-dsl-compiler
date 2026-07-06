@@ -1,5 +1,5 @@
 # Advanced-circuit bank N=16: THREE feed belts (cable+green+plastic) into each.
-# STATUS (engine e4a688b): PASS (verifies)
+# STATUS (engine 8e613a8): PASS (verifies)
 
 input cu : copper-plate
 input iron : iron-plate

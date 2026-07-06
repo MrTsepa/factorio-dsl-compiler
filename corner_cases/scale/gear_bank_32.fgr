@@ -1,5 +1,5 @@
 # Gear bank N=32: 1 iron belt -> 32 gear assemblers -> 1 merge belt.
-# STATUS (engine e4a688b): PASS (verifies)
+# STATUS (engine 8e613a8): PASS (verifies)
 
 input iron : iron-plate
 assembler g0 : iron-gear-wheel
