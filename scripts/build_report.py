@@ -363,7 +363,10 @@ def sized_cards():
         for it, v in meas.items():
             desc_lines.append(f"measured in-game: {it} {v}/s")
         for n, m in plan["machines"].items():
-            desc_lines.append(f"{n}: {m['copies']}x ({m['binding']}-bound)")
+            how = (f"{m['binding']}-bound" if "binding" in m
+                   else "bank " + "/".join(f"{k}={v}" for k, v in
+                                           (m.get("arms") or {}).items()))
+            desc_lines.append(f"{n}: {m['copies']}x ({how})")
         desc_lines.append("input lanes: " + ", ".join(
             f"{k}x{v}" for k, v in plan.get("input_lanes", {}).items()))
         rec["bp"] = to_blueprint_string(lay, p.stem, description="\n".join(desc_lines))
