@@ -44,7 +44,7 @@ from .layout import (BELT, CHEST_INPUT, CHEST_OUTPUT, INSERTER, LOADER, PIPE,
                      UG_MAX_GAP, Layout, PlacedEntity,
                      _RECIPE_KINDS, _assign_rows, _fluid_connections, _layers,
                      _node_proto)
-from .power import emit_power, plan_power, power_tiles
+from .power import emit_power, patch_power, plan_power, power_tiles
 
 CARDINALS = (NORTH, EAST, SOUTH, WEST)
 
@@ -405,13 +405,20 @@ def _dijkstra(ctx: _Ctx, state: _State, net_id, kind, sources, targets, tree_til
 
     if not targets:
         return None
-    # A*: admissible remaining-cost bound = manhattan distance to the nearest target
-    # x the cheapest possible per-tile rate (a long dive; soft prices only add).
-    t_list = list(targets)
+    # A*: admissible remaining-cost bound = manhattan distance to the TARGET BBOX
+    # x the cheapest per-tile rate. Bbox distance <= true nearest-target distance,
+    # so still admissible -- and O(1) instead of a min over every target (that min
+    # was the single hottest line on the scale_* fields).
     h_rate = SURF if kind == "belt" else BUR_PIPE   # jumps cost >= SURF/tile for belts
+    t_lo_x = min(t[0] for t in targets)
+    t_hi_x = max(t[0] for t in targets)
+    t_lo_y = min(t[1] for t in targets)
+    t_hi_y = max(t[1] for t in targets)
 
     def h(t):
-        return min(abs(t[0] - a[0]) + abs(t[1] - a[1]) for a in t_list) * h_rate
+        dx = (t_lo_x - t[0]) if t[0] < t_lo_x else (t[0] - t_hi_x if t[0] > t_hi_x else 0)
+        dy = (t_lo_y - t[1]) if t[1] < t_lo_y else (t[1] - t_hi_y if t[1] > t_hi_y else 0)
+        return (dx + dy) * h_rate
 
     # States are keyed (tile, lock): lock is the forced direction after a tunnel
     # landing (an exit can't turn), None for a free tile. Keying by tile alone would
@@ -1266,6 +1273,11 @@ def _negotiate(ctx: _Ctx, belt_nets, fluid_nets):
             #                          rounds; the outer vgap escalation is the better
             #                          lever at this point (slow convergers DO recover
             #                          after 6-8 flat rounds -- don't cut earlier)
+        if pres >= PRES_CAP and overused and _round >= 12:
+            break                    # hard tile conflicts survived maxed-out prices:
+            #                          the field is simply too tight at this vgap --
+            #                          grinding the remaining rounds burns seconds per
+            #                          round on big fields (scale_1 spent 38s here)
         for r in overused:
             state.hist[r] = state.hist.get(r, 0) + HIST_INC
         for t in weld_tiles:
@@ -1397,17 +1409,39 @@ def _compile_at(graph: Graph, vgap: int) -> Layout:
     # cannot spare -- a substation on a face once starved a 4-product sink -- so the
     # planner treats them as occupied and snaps elsewhere.
     halo: set = set()
+    busy = {c for (c, _t) in ctx.pair_partner} | {c for c, n in ctx.n_products.items()
+                                                  if n > 2}
     for n, b in bodies.items():
-        if b.proto in (CHEST_INPUT, CHEST_OUTPUT):
-            for f, o in _faces(b):
-                for k in range(3):
-                    halo.add((f[0] + k * DIR_DELTA[o][0], f[1] + k * DIR_DELTA[o][1]))
-    pplan = plan_power(ctx.walls | halo)
+        # keep substations out of working ground: a 2-ring around every machine
+        # (inserter faces + first gutter lane), 3 around chests (loader depth), and a
+        # full 8 apron around pair/multi-product sinks (their riser staging area --
+        # a substation there once cost wide_reconverge its convergence)
+        depth = 8 if n in busy else (3 if b.proto in (CHEST_INPUT, CHEST_OUTPUT) else 2)
+        w, h = b.size
+        for tx in range(b.x - depth, b.x + w + depth):
+            for ty in range(b.y - depth, b.y + h + depth):
+                halo.add((tx, ty))
+    # EEI hint: west of the build at the INPUT row -- power feeds in alongside the
+    # raw materials (input chests sit in column 0 by construction).
+    inputs = [b for b in bodies.values() if b.proto == CHEST_INPUT]
+    anchor = inputs if inputs else list(bodies.values())
+    hint = (min(b.x for b in anchor) - 6,
+            round(sum(b.y for b in anchor) / len(anchor)))
+    # coverage target: machine footprints dilated by 6 -- the ground inserters,
+    # loader assemblies and gutter taps can occupy (a fringe miss is patched after
+    # routing by patch_power)
+    cover: set = set()
+    for b in bodies.values():
+        w, h = b.size
+        for tx in range(b.x - 6, b.x + w + 6):
+            for ty in range(b.y - 6, b.y + h + 6):
+                cover.add((tx, ty))
+    pplan = plan_power(ctx.walls | halo, cover=cover, eei_hint=hint)
     ctx.walls |= power_tiles(pplan)
     belt_nets, fluid_nets = _build_nets(graph, bodies)
     plans = _negotiate(ctx, belt_nets, fluid_nets)
     _emit(layout, plans)
-    emit_power(layout, pplan)
+    emit_power(layout, patch_power(layout, pplan))
     return layout
 
 

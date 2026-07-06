@@ -1,5 +1,5 @@
 # Refinery N=6: same-fluid producers packed, each fanning by pipe to 2 fluid consumers (weld+reach).
-# STATUS (engine baa69ac): PASS (verifies)
+# STATUS (engine e4a688b): PASS (verifies)
 
 fluid crude : crude-oil
 fluid water : water

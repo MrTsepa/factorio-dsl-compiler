@@ -45,13 +45,20 @@ def _wired(a, b):
     return dx * dx + dy * dy <= SUBSTATION_WIRE * SUBSTATION_WIRE
 
 
-def plan_power(occ: set) -> list:
+def plan_power(occ: set, cover: set | None = None,
+               eei_hint: tuple | None = None) -> list:
     """PRE-ROUTING power plan: substation top-lefts + one EEI spot, chosen against the
     machine-only occupancy `occ` (bodies + reserved fluid-box tiles) so the ground is
     still open. The caller must treat every returned tile as a WALL for the routers --
     belts/pipes go around or dive under (game entities never block underground runs).
     Planning before routing is what makes dense fields work: after routing, dense
     layouts have no free 2x2 left, and a post-hoc overlay strands entire regions.
+
+    ``cover`` is the set of tiles whose coverage the plan must guarantee (defaults to
+    ``occ``); ``eei_hint`` is the preferred EEI spot (top-left). Convention: just WEST
+    of the build at the input row -- power feeds in alongside the raw materials,
+    outside the fabric but not off in a corner. The EEI lands as close to the hint as
+    a free, supply-covered 2x2 allows.
 
     Returns [("sub", (x, y)), ..., ("eei", (x, y))]."""
     if not occ:
@@ -78,30 +85,94 @@ def plan_power(occ: set) -> list:
     ys = [t[1] for t in occ]
     x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
 
-    # full lattice, margined past the bbox: routing may wander ~12 tiles beyond the
-    # machines (router bounds), and a tap inserter out there needs power too
-    subs: list[tuple[int, int]] = []
-    gy = y0 - 6
+    # GREEDY SET COVER, not a blanket lattice (which ringed small builds with twice
+    # the substations they need): the coverage target is `cover`, candidates sit on a
+    # half-pitch grid snapped to free ground, and each round keeps the spot covering
+    # the most still-uncovered target tiles. A rare consumer landing outside `cover`
+    # during routing is handled post-routing by patch_power().
+    if cover is None:
+        cover = set(occ)
+    todo = set(cover)
+    # candidates: a half-pitch grid over the field PLUS lines through the cover's
+    # centre axes -- a strip-shaped build is covered by ONE centred row of
+    # substations, which the coarse grid alone can't express
+    cxs = [t[0] for t in cover]
+    cys = [t[1] for t in cover]
+    mid_x = (min(cxs) + max(cxs)) // 2 - 1
+    mid_y = (min(cys) + max(cys)) // 2 - 1
+    cand: list = []
+    seen: set = set()
+
+    def consider(px, py):
+        s = snap(px, py)
+        if s is not None and s not in seen:
+            seen.add(s)
+            cand.append(s)
+
+    # centre-line candidates put substations ON the main corridors: lovely for small
+    # builds (one straight row covers a strip factory), but on big fields they choke
+    # the router's busiest ground and negotiation rounds get seconds slower -- gate
+    # them by build size
+    mid_lines = (x1 - x0) * (y1 - y0) <= 2500
+    gy = y0 - 8
     while gy <= y1 + 8:
-        gx = x0 - 6
+        gx = x0 - 8
         while gx <= x1 + 8:
-            s = snap(gx, gy)
-            if s is not None:
-                subs.append(s)
-                claim(s)
-            gx += PITCH
-        gy += PITCH
+            consider(gx, gy)
+            if mid_lines:
+                consider(gx, mid_y)
+                consider(mid_x, gy)
+            gx += PITCH // 2
+        gy += PITCH // 2
+
+    # bucket candidates on a 9-tile grid: each todo tile touches O(1) buckets, so a
+    # pick is one linear pass over the remaining tiles (the naive candidates x tiles
+    # product took ~25s on the scale_* fields)
+    buckets: dict = {}
+    for i, s in enumerate(cand):
+        buckets.setdefault((s[0] // 9, s[1] // 9), []).append(i)
+    alive = [True] * len(cand)
+
+    def covering(t):
+        tx, ty = t
+        for bx in range((tx - 9) // 9, (tx + 8) // 9 + 1):
+            for by in range((ty - 9) // 9, (ty + 8) // 9 + 1):
+                for i in buckets.get((bx, by), ()):
+                    sx, sy = cand[i]
+                    if alive[i] and sx - 8 <= tx <= sx + 9 and sy - 8 <= ty <= sy + 9:
+                        yield i
+
+    subs: list[tuple[int, int]] = []
+    while todo:
+        gain: dict = {}
+        for t in todo:
+            for i in covering(t):
+                gain[i] = gain.get(i, 0) + 1
+        if not gain:
+            break                              # leftovers have no reachable candidate
+        i = max(gain, key=lambda i: (gain[i], -cand[i][1], -cand[i][0]))
+        alive[i] = False
+        best = cand[i]
+        if not free(best):                     # an earlier claim took this ground
+            continue
+        subs.append(best)
+        claim(best)
+        todo = {t for t in todo
+                if not (best[0] - 8 <= t[0] <= best[0] + 9
+                        and best[1] - 8 <= t[1] <= best[1] + 9)}
     if not subs:
         return []
     plan = _bridge(subs, free, claim)
 
-    # the EEI: a free 2x2 in the first substation's supply area, nearest it
-    s0 = plan[0]
-    cand = [(s0[0] + dx, s0[1] + dy) for dx in range(-8, 9) for dy in range(-8, 9)]
-    cand.sort(key=lambda t: (abs(t[0] - s0[0]) + abs(t[1] - s0[1]), t))
+    # the EEI: as close to the hint as possible (default: west of the build, mid-
+    # height), on free ground inside SOME substation's supply area.
+    hx, hy = eei_hint if eei_hint is not None else (x0 - 5, (y0 + y1) // 2)
     out = [("sub", s) for s in plan]
+    cand = [(hx + dx, hy + dy) for dx in range(-8, 9) for dy in range(-8, 9)]
+    cand.sort(key=lambda t: (abs(t[0] - hx) + abs(t[1] - hy), t))
     for t in cand:
-        if free(t) and _supply_covers(s0, ((t[0], t[1]), (t[0] + 1, t[1] + 1))):
+        if free(t) and any(_supply_covers(s, ((t[0], t[1]), (t[0] + 1, t[1] + 1)))
+                           for s in plan):
             out.append(("eei", t))
             break
     return out
@@ -166,11 +237,51 @@ def _bridge(subs, free, claim):
     return subs
 
 
+def patch_power(layout: Layout, plan) -> list:
+    """POST-ROUTING safety net: any POWERED entity outside the planned supply gets a
+    nearby substation on whatever free ground routing left (rare -- a tap on a fringe
+    detour outside the dilated cover). Returns the extended plan; emit AFTER this."""
+    subs = [s for k, s in plan if k == "sub"]
+    occ = {t for e in layout.entities for t in e.tiles()} | power_tiles(plan)
+
+    def free(s):
+        sx, sy = s
+        return not ({(sx, sy), (sx + 1, sy), (sx, sy + 1), (sx + 1, sy + 1)} & occ)
+
+    def claim(s):
+        occ.update(((s[0], s[1]), (s[0] + 1, s[1]), (s[0], s[1] + 1), (s[0] + 1, s[1] + 1)))
+
+    dark = [e for e in layout.entities if e.proto in POWERED
+            and not any(_supply_covers(s, e.tiles()) for s in subs)]
+    if not dark:
+        return plan
+    for e in sorted(dark, key=lambda e: (e.y, e.x)):
+        if any(_supply_covers(s, e.tiles()) for s in subs):
+            continue                           # an earlier patch already covers it
+        tx, ty = e.tiles()[0]
+        cand = [(tx + dx, ty + dy) for dx in range(-9, 9) for dy in range(-9, 9)]
+        cand.sort(key=lambda s: (min((abs(s[0] - o[0]) + abs(s[1] - o[1]) for o in subs),
+                                     default=0), s))
+        spot = next((s for s in cand if free(s) and _supply_covers(s, e.tiles())), None)
+        if spot is not None:
+            subs.append(spot)
+            claim(spot)
+    subs = _bridge(subs, free, claim)
+    return [("sub", s) for s in subs] + [(k, s) for k, s in plan if k != "sub"]
+
+
 def add_power(layout: Layout) -> None:
     """POST-ROUTING fallback overlay (used by the legacy v1/v2 generators): plan
     against whatever ground routing left and emit immediately. Dense layouts may not
     leave enough 2x2 ground -- v3 plans BEFORE routing instead (the reliable path)."""
-    if not any(e.proto in POWERED for e in layout.entities):
+    consumers = [e for e in layout.entities if e.proto in POWERED]
+    if not consumers:
         return
-    plan = plan_power({t for e in layout.entities for t in e.tiles()})
+    inputs = [e for e in layout.entities if e.proto == "infinity-chest"]
+    anchor = inputs if inputs else consumers
+    hint = (min(e.x for e in anchor) - 6,
+            round(sum(e.y for e in anchor) / len(anchor)))
+    plan = plan_power({t for e in layout.entities for t in e.tiles()},
+                      cover={t for e in consumers for t in e.tiles()},
+                      eei_hint=hint)
     emit_power(layout, plan)

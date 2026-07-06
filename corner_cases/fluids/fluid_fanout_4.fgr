@@ -1,5 +1,5 @@
 # Fluid fan-out N=4: one petroleum source piped to 4 plastic plants + 1 coal belt.
-# STATUS (engine baa69ac): PASS (verifies)
+# STATUS (engine e4a688b): PASS (verifies)
 
 fluid petroleum : petroleum-gas
 input coal : coal

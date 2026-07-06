@@ -1,5 +1,5 @@
 # Hub fan-out N=4: one green-circuit belt tapped by 4 downstream 3x3 assemblers.
-# STATUS (engine baa69ac): PASS (verifies)
+# STATUS (engine e4a688b): PASS (verifies)
 
 input iron : iron-plate
 input cu : copper-plate

@@ -1,5 +1,5 @@
 # High fan-in N=4 into a single 3x3 assembler, then to output.
-# STATUS (engine baa69ac): PASS (verifies)
+# STATUS (engine e4a688b): PASS (verifies)
 
 input iron : iron-plate
 assembler p0 : copper-cable

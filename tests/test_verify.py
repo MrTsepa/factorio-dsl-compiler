@@ -38,7 +38,11 @@ def test_missing_belt_breaks_a_lane():
     ax, ay = bodies["iron"].center
     bx, by = bodies["gears"].center
     mx, my = (ax + bx) / 2, (ay + by) / 2
-    belts = [e for e in lay.entities if e.proto == BELT]
+    # the lane's mid-run carrier may be a surface belt OR an underground end (the
+    # router dives under substations on the spine row) -- sabotage whichever exists
+    from fgr.layout import UNDERGROUND
+    belts = ([e for e in lay.entities if e.proto == BELT]
+             or [e for e in lay.entities if e.proto == UNDERGROUND])
     victim = min(belts, key=lambda e: abs(e.x - mx) + abs(e.y - my))
     lay.entities = [e for e in lay.entities if e is not victim]
     report = verify(g, lay)
