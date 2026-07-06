@@ -1,31 +1,19 @@
 # ONE-BELT suite — results (engine as of this commit)
 
-A full yellow belt (15/s) of each of 61 base-game items; specs generated
-from real recipe data by `scripts/belt_suite.py --gen`, graded by the
-verifier + the SIDE-AWARE placed-layout flow oracle (`--run`). The oracle
-now agrees with in-game measurements: a one-sided routed merge is ONE lane
-(7.5/s) no matter how many chests you'd be tempted to add — the boundary
-contract is one output chest per full belt.
+A full yellow belt (15/s) of each of 61 base-game items; graded by the verifier
++ the SIDE-AWARE placed-layout flow oracle. `/goal`: all 61 passing; metric:
+entity count (lower is better).
 
-**7 / 61 honestly carry the full belt** (5 as compact banks), 10 verify but fall short (routed one-lane merges at 7.5/s,
-plus near-misses), 41 too big for the routed fallback, 3
-time out in v3 negotiation. 0 verifier failures, 0 errors.
+**39 / 61 carry the full belt** (50 compile as banks; total passing entities 419,893, median 3601), 8 verify but fall short, 3 fail
+verification, 6 too big for the routed fallback, 3 verify-timeouts (the flow
+oracle needs a straight-run collapse for 50k+ entity layouts), 0 errors.
 
-| outcome | items |
-|---|---|
-| full belt (bank) | copper_cable, electronic_circuit, iron_stick, pipe, small_electric_pole |
-| full belt (routed, both-lane merge) | plastic_bar, sulfur |
-| short | battery (7.5/s), burner_inserter (7.5/s), concrete (7.5/s), explosives (7.5/s), firearm_magazine (7.5/s), iron_chest (7.5/s), iron_gear_wheel (7.5/s), stone_brick (7.5/s), stone_furnace (7.5/s), transport_belt (14.724/s) |
-| v3 timeout (150 s) | inserter, rail, underground_belt |
+| class | items | next fix |
+|---|---|---|
+| SHORT ~14.7 (one lane short at exit) | boiler, burner_inserter, transport_belt, storage_tank, electric_mining_drill | collector lane-group budgeting off-by-one |
+| SHORT mid | fast_transport_belt 8.6, medium_electric_pole 13.1, steam_engine 13.9, lab | multi-port arm dealing shortfalls |
+| VERIFY-FAIL | long_handed_inserter, pump, processing_unit | overlaps in dense multi-lh margins |
+| TIMEOUT (150 s) | big_electric_pole, chemical_science, electric_engine_unit, electric_furnace, lab | verify/oracle cost on huge builds |
+| TOO-BIG (routed fallback) | advanced_circuit, am2, bulk_inserter, flying_robot_frame, production_science, substation | >3-ingredient stages -> bank v3 |
 
-## The roadmap this measures (priority order)
-
-1. **Fluids in banks** — every chem item (battery, concrete, sulfur*,
-   plastic*, explosives) needs the bank's lane weave to fill both output
-   lanes; the routed path caps at one lane. (*pass today only because their
-   routed merges happen to enter from both sides — geometry luck the oracle
-   now grades per layout.)
-2. **Mirrored blocks / multi-belt outputs** — unlocks >15/s and most of the
-   41 too-big items, along with per-tier targets (items/min).
-3. **fastbelt-class long-hauls** — a 5-per-craft ingredient overflows one
-   drop-fed lane; needs two long-haul rows or adjacency-aware reordering.
+Entity leaderboard (passing, lowest): copper_cable (176), iron_stick (176), pipe (235), plastic_bar (268), iron_gear_wheel (289), small_electric_pole (360), stone_brick (432), sulfur (470)
