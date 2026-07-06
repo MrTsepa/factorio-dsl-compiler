@@ -42,14 +42,13 @@ comparison). Live numbers: run the script yourself.
 
 | generator | pass rate | timeouts | avg compile\* | total entities\* | belt turns\* | tunnel crossings\* |
 |---|---|---|---|---|---|---|
-| v1 (A\* rip-up) | 90 / 155 | 19 | 1,371 ms | 40,284 | 2,313 | 1,253 |
-| v2 (lane fabric) | 99 / 155 | 3 | **108 ms** | 67,338 | 706 | 3,568 |
-| **v3 (global router)** | **153 / 155**\*\* | 2\*\* | 623 ms | **57,542** | **223** | **2,304** |
+| v1 (A\* rip-up) | 118 / 155 | 11 | 435 ms | 67,775 | 4,113 | 2,523 |
+| v2 (lane fabric) | 113 / 155 | 0 | **24 ms** | 96,088 | 995 | 4,578 |
+| **v3 (global router)** | **155 / 155** | **0** | 112 ms | **61,974** | **259** | **2,554** |
 
-<sub>\*each on that generator's own passing set. \*\*the two "timeouts" are `scale_5`/
-`scale_6`, the largest synthetic giants: both VERIFY in-process (~25-40s) but exceed the
-comparison's 10s per-case cap -- the in-process corpus is 155/155. They react oppositely
-to in-fabric power obstacles; negotiation-aware power placement is the tracked fix.</sub>
+<sub>\*each on that generator's own passing set. Lean power grids (set-cover planning,
+dilation-3 targets) removed enough router obstacles that even the largest giants now
+finish well inside the 10s per-case cap.</sub>
 
 - **Completeness.** v3 passes the entire battery — including every case in v2's tracked
   tail (congested belt risers: `fanin_asm_*`, `reconverge_*`, `butterfly_*`, `bus_4`;
@@ -68,8 +67,8 @@ to in-fabric power obstacles; negotiation-aware power placement is the tracked f
   total vs v2's 1,867 — merges and flexible pins remove almost every needless jog. Tunnel
   crossings are the lowest of the three, and belts never tunnel across open ground (a dive
   only wins when the surface is actually blocked).
-- **Speed.** v3 averages ~600 ms — the power planning, wired blueprints and denser
-  legality rules cost real work; worst case ~40 s (`scale_5`, the 100-machine giant). The negotiation loop is bounded (20 rounds, early stall
+- **Speed.** v3 averages ~110 ms with power planning, wired blueprints and the full
+  legality rules included; the worst case (the 100-machine giants) stays under 10 s. The negotiation loop is bounded (20 rounds, early stall
   cutoff) and every search is A\* over a finite field, so there is no hang mode.
 - **Determinism.** Same input → byte-identical layout (no RNG, no wall clock; verified on
   the hard cases).
