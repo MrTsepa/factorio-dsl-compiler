@@ -367,18 +367,32 @@ def compile_bank(graph: Graph, dumper="auto"):
                                          meta={"net": f"b:{n}"}))
                 y = y_bus                                  # next stage's far belt row
             else:
-                # ONE collector per block; oversupply just backs up into the machines
+                # collectors: one lane per 7.5/s of block output. A second collector
+                # sits one row below, fed by LONG arms picking the machine's middle
+                # row over the first collector; the exit weave merges the two lanes.
+                block_out = nb * sl["rate"] * out_amt[n]
+                # global budget: one output belt = two lanes total. Multi-block
+                # builds get one collector each; only a single block may take two.
+                n_coll = (1 if blocks > 1
+                          else (2 if block_out > LANE_CAP + 1e-9 else 1))
+                oi = 0
                 for k in range(nb):
                     x = slot_x(xs[k])
                     face = [x, x + 1, x + 2]
                     for j in range(sl["k_out"]):
-                        lay.add(PlacedEntity(INSERTER, face[j], y_arm_out,
-                                             direction=N, meta={"role": "out"}))
-                for x in range(-2, W):
-                    lay.add(PlacedEntity(BELT, x, y_bus, direction=E,
-                                         meta={"net": f"b:{n}"}))
-                collector_belts.append(y_bus)
-                y = y_bus
+                        if n_coll == 2 and oi % 2 == 1:
+                            lay.add(PlacedEntity(LONG_INSERTER, face[j], y_arm_out,
+                                                 direction=N, meta={"role": "out"}))
+                        else:
+                            lay.add(PlacedEntity(INSERTER, face[j], y_arm_out,
+                                                 direction=N, meta={"role": "out"}))
+                        oi += 1
+                for c in range(n_coll):
+                    for x in range(-2, W):
+                        lay.add(PlacedEntity(BELT, x, y_bus + c, direction=E,
+                                             meta={"net": f"b:{n}"}))
+                    collector_belts.append(y_bus + c)
+                y = y_bus + n_coll - 1
             # substations in the reserved power slots of EVERY stage's machine band
             # (a substation reaches -8..+9 from its top-left; margins get their own)
             for p in power_slots + [width_slots]:
@@ -471,9 +485,10 @@ def compile_bank(graph: Graph, dumper="auto"):
         col = W + 1
         for x in range(W, col):
             lay.add(PlacedEntity(BELT, x, yy, direction=E, meta=tag))
-        lay.add(PlacedEntity(BELT, col, yy, direction=N, meta=tag))
-        for yv in range(out_y + 2, yy):
-            lay.add(PlacedEntity(BELT, col, yv, direction=N, meta=tag))
+        if yy > out_y + 1:                        # adjacent collectors: the UG
+            lay.add(PlacedEntity(BELT, col, yy, direction=N, meta=tag))
+            for yv in range(out_y + 2, yy):       # entrance IS the climb tile
+                lay.add(PlacedEntity(BELT, col, yv, direction=N, meta=tag))
         lay.add(PlacedEntity(UNDERGROUND, col, out_y + 1, direction=N,
                              ug_type="input", meta=tag))
         lay.add(PlacedEntity(UNDERGROUND, col, out_y - 1, direction=N,
