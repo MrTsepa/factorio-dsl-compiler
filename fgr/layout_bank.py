@@ -330,9 +330,6 @@ def compile_bank(graph: Graph, dumper="auto"):
     blocks = 1
     for ing, d in raw_unit.items():
         blocks = max(blocks, math.ceil(d * target / lane_usable))
-    if blocks > 2:
-        raise BankInapplicable(f"{blocks} blocks (a raw item needs more than two "
-                               f"belt-rows)")
     per_block = {n: [counts[n] // blocks + (1 if b < counts[n] % blocks else 0)
                      for b in range(blocks)] for n in stages}
 
@@ -674,40 +671,63 @@ def compile_bank(graph: Graph, dumper="auto"):
             raw_rows_pending[item] = {"rows": names}
 
     # ---- collectors + exit weave ----------------------------------------------------------
+    # N collectors merge onto ONE output belt via alternating-lane rails: the first
+    # collector IS the output row (its drops ride the south lane); every later
+    # collector approaches on its own margin column -- from the SOUTH (climb, then
+    # push north: entry side = south lane) or, when the south lane group is full,
+    # from the NORTH (the weave: tunnel under the output row, curve, side-load from
+    # above filling the north lane). Each lane group's flow must fit 7.5/s.
     tag = {"net": f"b:{last_stage}"}
     ys = sorted(yy for yy, _b in collector_rows)
-    if len(ys) > 2:
-        raise BankInapplicable("more than two collector lanes")
     for yy in ys:
         belt_row(yy, last_stage)
     out_y = ys[0]
-    # the weave column sits EAST of every long-haul column (its climb crosses many
-    # rows; nothing else may live there), and the output belt extends to meet it
-    weave_col = next_col + 1
-    end_x = (weave_col + 3) if len(ys) == 2 else W + 6
+    # a collector lane physically carries at most 7.5/s (oversupply backs up into
+    # the machines -- the measured greenchips behaviour); group by that reality
+    per_coll = min(LANE_CAP, (target / len(ys)) if ys else 0.0)
+    south_used = per_coll                          # collector 0's own drops
+    merge_col = next_col + 1
+    end_x = merge_col + 2 * max(len(ys) - 1, 0) + 4
     for x in range(W, end_x):
         lay.add(PlacedEntity(BELT, x, out_y, direction=E, meta=tag))
-    if len(ys) == 2:
-        yy = ys[1]
-        col = weave_col
+    for k, yy in enumerate(ys[1:], start=1):
+        col = merge_col + 2 * (k - 1)
         for x in range(W, col):
             lay.add(PlacedEntity(BELT, x, yy, direction=E, meta=tag))
-        if yy > out_y + 1:
+        if south_used + per_coll <= LANE_CAP + 1e-9:
+            south_used += per_coll
+            # SOUTH approach: climb to just below the output row, push north
             lay.add(PlacedEntity(BELT, col, yy, direction=N, meta=tag))
             for yv in range(out_y + 2, yy):
                 lay.add(PlacedEntity(BELT, col, yv, direction=N, meta=tag))
-        lay.add(PlacedEntity(UNDERGROUND, col, out_y + 1, direction=N,
-                             ug_type="input", meta=tag))
-        lay.add(PlacedEntity(UNDERGROUND, col, out_y - 1, direction=N,
-                             ug_type="output", meta=tag))
-        lay.add(PlacedEntity(BELT, col, out_y - 2, direction=E, meta=tag))
-        lay.add(PlacedEntity(BELT, col + 1, out_y - 2, direction=S, meta=tag))
-        lay.add(PlacedEntity(BELT, col + 1, out_y - 1, direction=S, meta=tag))
+            lay.add(PlacedEntity(BELT, col, out_y + 1, direction=N, meta=tag))
+        else:
+            # NORTH approach (the weave): tunnel under the output row
+            if yy > out_y + 1:
+                lay.add(PlacedEntity(BELT, col, yy, direction=N, meta=tag))
+                for yv in range(out_y + 2, yy):
+                    lay.add(PlacedEntity(BELT, col, yv, direction=N, meta=tag))
+            lay.add(PlacedEntity(UNDERGROUND, col, out_y + 1, direction=N,
+                                 ug_type="input", meta=tag))
+            lay.add(PlacedEntity(UNDERGROUND, col, out_y - 1, direction=N,
+                                 ug_type="output", meta=tag))
+            lay.add(PlacedEntity(BELT, col, out_y - 2, direction=E, meta=tag))
+            lay.add(PlacedEntity(BELT, col + 1, out_y - 2, direction=S, meta=tag))
+            lay.add(PlacedEntity(BELT, col + 1, out_y - 1, direction=S, meta=tag))
     lay.add(PlacedEntity(LOADER, end_x, out_y, direction=E, loader_type="input",
                          meta=tag))
     lay.add(PlacedEntity(CHEST_OUTPUT, end_x + 2, out_y, meta={"node": out_node}))
-    if end_x > slot_x(width_slots) + 9:            # exit beyond the field's power
-        sub_positions.append((end_x, out_y + 2))
+    # relay substations along the merge zone (north strip, clear of the approach
+    # columns): long rails otherwise outrun the field grid's wire reach
+    sx0 = slot_x(width_slots)
+    x_relay = sx0 + 14
+    last_relay = sx0
+    while x_relay <= end_x + 2:
+        sub_positions.append((x_relay, out_y - 4))
+        last_relay = x_relay
+        x_relay += 14
+    if end_x - last_relay > 8:                     # the exit loader must be covered
+        sub_positions.append((end_x - 1, out_y - 4))
 
     # ---- power ---------------------------------------------------------------------------
     seen_sub = set()
