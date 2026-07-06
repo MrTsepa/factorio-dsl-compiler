@@ -169,7 +169,8 @@ def simulate_bp(bp: str, ticks: int, keep: bool = False) -> dict:
     print(f"  scenario2map ok ({dt:.1f}s) -> {save.name}")
 
     p, dt = r.factorio("--benchmark", f"{r.write_dir}/saves/{SCENARIO}.zip",
-                       "--benchmark-ticks", str(ticks), timeout=1800)
+                       "--benchmark-ticks", str(ticks),
+                       timeout=max(1800, ticks // 40))  # big builds run ~40 ticks/s
     if not result.exists():
         raise SystemExit(f"benchmark wrote no result.json.\nstdout: {p.stdout[-1200:]}")
     print(f"  benchmark {ticks} ticks ok ({dt:.1f}s wall)")
