@@ -10,8 +10,9 @@ from .layout import (ASSEMBLER, CHEMICAL, CHEST_INPUT, FLUID_SOURCE, INPUT_FILL,
 VERSION = 562949954207746
 
 
-def to_blueprint(layout: Layout, label: str = "fgr") -> dict:
-    """Convert a :class:`Layout` into a Factorio blueprint dict."""
+def to_blueprint(layout: Layout, label: str = "fgr", description: str | None = None) -> dict:
+    """Convert a :class:`Layout` into a Factorio blueprint dict. ``description`` shows
+    in the in-game blueprint tooltip -- we use it for the expected-rates metadata."""
     entities = []
     for i, e in enumerate(layout.entities, start=1):
         cx, cy = e.center
@@ -35,6 +36,8 @@ def to_blueprint(layout: Layout, label: str = "fgr") -> dict:
         entities.append(ent)
     bp = {"blueprint": {"item": "blueprint", "label": label,
                         "version": VERSION, "entities": entities}}
+    if description:
+        bp["blueprint"]["description"] = description
     wires = _pole_wires(layout)
     if wires:
         bp["blueprint"]["wires"] = wires
@@ -78,5 +81,6 @@ def _pole_wires(layout: Layout) -> list:
     return wires
 
 
-def to_blueprint_string(layout: Layout, label: str = "fgr") -> str:
-    return encode_blueprint_string(to_blueprint(layout, label))
+def to_blueprint_string(layout: Layout, label: str = "fgr",
+                        description: str | None = None) -> str:
+    return encode_blueprint_string(to_blueprint(layout, label, description))

@@ -47,7 +47,13 @@ def _recipe_lint(graph):
 def cmd_compile(args) -> int:
     graph, layout = _build(args.source, args.generator)
     report = verify(graph, layout)
-    bp = to_blueprint_string(layout, label=Path(args.source).stem)
+    desc = None
+    try:                                          # rates ride along in the in-game
+        from .rates import analyze, summary_lines  # blueprint description (tooltip)
+        desc = "\n".join(summary_lines(analyze(graph, layout)))
+    except Exception:                             # noqa: BLE001 -- metadata only
+        pass
+    bp = to_blueprint_string(layout, label=Path(args.source).stem, description=desc)
 
     print(f"# {args.source}: {len(graph.nodes)} nodes, {len(graph.edges)} lanes, "
           f"{len(layout.entities)} entities")
@@ -79,6 +85,30 @@ def cmd_verify(args) -> int:
     return 0 if report.ok and recipes_ok is not False else 2
 
 
+def cmd_rates(args) -> int:
+    graph, layout = _build(args.source, args.generator)
+    from .rates import RatesUnavailable, analyze, summary_lines
+    try:
+        rep = analyze(graph, layout)
+    except RatesUnavailable as e:
+        print(f"rates unavailable (needs FBSR game data): {e}", file=sys.stderr)
+        return 1
+    if args.json:
+        import json
+        print(json.dumps(rep, indent=2))
+    else:
+        print(f"# {args.source} — steady-state rate estimate (docs/RATES.md)")
+        for ln in summary_lines(rep):
+            print(f"  {ln}")
+        print("\n## links (required vs capacity at the all-outputs operating point)")
+        for k, v in sorted((rep.get("links") or {}).items()):
+            cap = v["capacity_per_s"]
+            u = f" — {int(v['utilization'] * 100)}%" if v.get("utilization") else ""
+            print(f"  {k}: {v['required_per_s']}/s over {v.get('via', 'pipe')} "
+                  f"(cap {cap if cap is not None else 'unbounded'}/s){u}")
+    return 0
+
+
 def cmd_validate_model(args) -> int:
     """Validate the verifier's geometric assumptions against Factorio data (via FBSR)."""
     from .fbsr_validation import FbsrUnavailable, format_checks, validate
@@ -104,6 +134,12 @@ def main(argv=None) -> int:
     c.add_argument("-g", "--generator", choices=sorted(GENERATORS), default=DEFAULT_GENERATOR,
                    help=f"layout generator to use (default: {DEFAULT_GENERATOR})")
     c.set_defaults(func=cmd_compile)
+
+    r = sub.add_parser("rates", help="steady-state throughput estimate for a .fgr file")
+    r.add_argument("source")
+    r.add_argument("-g", "--generator", choices=sorted(GENERATORS), default=DEFAULT_GENERATOR)
+    r.add_argument("--json", action="store_true")
+    r.set_defaults(func=cmd_rates)
 
     v = sub.add_parser("verify", help="print the verifier report for a .fgr file")
     v.add_argument("source")

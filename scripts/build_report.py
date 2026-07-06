@@ -85,7 +85,15 @@ def process(name, text, render=False, timeout=0):
         rec["status"] = "PASS" if rep.ok else "VERIFY-FAIL"
         # render + offer the blueprint for ALL layouts (even failing ones) so the report shows
         # exactly what v2 produces, including the near-misses; the badge marks pass/fail.
-        rec["bp"] = to_blueprint_string(lay, name)            # importable string (copy button)
+        desc = None
+        try:                                     # expected rates ride in the blueprint
+            from fgr.rates import analyze, summary_lines
+            rrep = analyze(g, lay)
+            desc = "\n".join(summary_lines(rrep))
+            rec["rates"] = summary_lines(rrep)[:2]
+        except Exception:                        # noqa: BLE001 -- metadata only
+            pass
+        rec["bp"] = to_blueprint_string(lay, name, description=desc)  # copy button
         if render and render_blueprint_string is not None:
             try:
                 png = OUT / f"render_{name}.png"
@@ -216,6 +224,7 @@ def card(rec):
       <h3>{esc(rec['name'])} <span class='badge b-{s}'>{s}</span></h3>
       <p class='sub'>{rec.get('blurb', '')}</p>
       <div class='sub muted'>{meta}</div>
+      {''.join(f"<div class='sub muted'>&#9201; {esc(x)}</div>" for x in rec.get('rates', []))}
       {img}
       <div class='under'>
         {copy_btn(rec)}
