@@ -90,7 +90,7 @@ def process(name, text, render=False, timeout=0):
             from fgr.rates import analyze, summary_lines
             rrep = analyze(g, lay)
             desc = "\n".join(summary_lines(rrep))
-            rec["rates"] = summary_lines(rrep)[:2]
+            rec["rates"] = summary_lines(rrep)
         except Exception:                        # noqa: BLE001 -- metadata only
             pass
         rec["bp"] = to_blueprint_string(lay, name, description=desc)  # copy button
@@ -161,6 +161,10 @@ details summary{cursor:pointer;outline:none}
 details{background:#15171b;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
 details pre{border:none;padding:8px 0 0}
 .foot{margin-top:46px;border-top:1px solid var(--line);padding-top:14px;font-size:13px}
+.rates{background:#15171b;border:1px solid var(--line);border-radius:8px;
+padding:10px 14px;margin:8px 0 4px;font-size:13px}
+.rtitle{font-weight:700;color:var(--acc);margin-bottom:4px}
+.rline{margin:2px 0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
 """
 
 COPY_JS = """
@@ -203,6 +207,21 @@ def checks_html(rec):
     return "".join(out)
 
 
+def rates_html(rec):
+    lines = rec.get("rates") or []
+    if not lines:
+        return ""
+    body, note = lines, ""
+    if lines and lines[-1].startswith("steady-state estimate"):
+        body, note = lines[:-1], lines[-1]
+    rows = "".join(f"<div class='rline'>{esc(x)}</div>" for x in body)
+    return (f"<div class='rates'><div class='rtitle'>&#9201; expected throughput "
+            f"<span class='muted'>(also embedded in the blueprint's in-game tooltip)"
+            f"</span></div>{rows}"
+            + (f"<div class='rline muted'>{esc(note)}</div>" if note else "")
+            + "</div>")
+
+
 def card(rec):
     s = rec["status"]
     img = (f"<img src='data:image/jpeg;base64,{rec['png']}' alt='{esc(rec['name'])}'>"
@@ -224,7 +243,7 @@ def card(rec):
       <h3>{esc(rec['name'])} <span class='badge b-{s}'>{s}</span></h3>
       <p class='sub'>{rec.get('blurb', '')}</p>
       <div class='sub muted'>{meta}</div>
-      {''.join(f"<div class='sub muted'>&#9201; {esc(x)}</div>" for x in rec.get('rates', []))}
+      {rates_html(rec)}
       {img}
       <div class='under'>
         {copy_btn(rec)}
