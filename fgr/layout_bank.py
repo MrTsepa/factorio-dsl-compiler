@@ -356,8 +356,11 @@ def compile_bank(graph: Graph, dumper="auto"):
     blocks = 1
     for ing, d in raw_unit.items():
         blocks = max(blocks, math.ceil(d * target / lane_usable))
-    per_block = {n: [counts[n] // blocks + (1 if b < counts[n] % blocks else 0)
-                     for b in range(blocks)] for n in stages}
+    # every block must cover its collector share on its own (a floored block
+    # delivered 6.9/s into a 7.5 lane -- the measured 14.7-cluster): round UP
+    per_block = {n: [math.ceil(counts[n] / blocks)] * blocks for n in stages}
+    for n in stages:
+        counts[n] = sum(per_block[n])
 
     # ---- geometry ----------------------------------------------------------------------
     # WEST-ROOM shifts (see the positioning pass): each stage starts far enough
