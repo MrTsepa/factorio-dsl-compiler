@@ -47,8 +47,9 @@ import math
 
 from .ir import Graph, Node, NodeKind
 from .layout import (ASSEMBLER, BELT, CHEMICAL, CHEST_INPUT, CHEST_OUTPUT, EEI,
-                     FURNACE, INSERTER, LOADER, LONG_INSERTER, SPLITTER, SUBSTATION,
-                     UNDERGROUND, Layout, PlacedEntity)
+                     FLUID_SOURCE, FURNACE, INSERTER, LOADER, LONG_INSERTER, PIPE,
+                     PIPE_TO_GROUND, SPLITTER, SUBSTATION, UNDERGROUND, Layout,
+                     PlacedEntity, _fluid_connections)
 from .rates import (ARM_BELT_PICK, ARM_CHEST_PICK, BELT_FULL, LANE_CAP,
                     LONG_ARM_PICK, RatesUnavailable, _ingredients, _machine_cap)
 from .solver import LANE_HEADROOM, SAFETY, SolveError
@@ -72,6 +73,10 @@ def blocks_hint(raw_unit, target):
     return b
 
 
+def raw_items_probe(graph):
+    return {nd.item for nd in graph.nodes.values() if nd.kind is NodeKind.INPUT}
+
+
 class BankInapplicable(RuntimeError):
     """This spec doesn't fit the sandwich template; use the generic path."""
 
@@ -82,8 +87,7 @@ class BankInapplicable(RuntimeError):
 def plan_dag(graph: Graph, dumper):
     """Topologically order machine stages and assign every ingredient to a template
     row. Raises BankInapplicable for shapes the emitter doesn't handle."""
-    if any(e.fluid for e in graph.edges):
-        raise BankInapplicable("fluids not yet supported by the bank template")
+
     outputs = [n for n, nd in graph.nodes.items() if nd.kind is NodeKind.OUTPUT]
     if len(outputs) != 1:
         raise BankInapplicable("bank template handles exactly one output")
@@ -92,11 +96,27 @@ def plan_dag(graph: Graph, dumper):
     raws = {n: nd.item for n, nd in graph.nodes.items()
             if nd.kind is NodeKind.INPUT}
 
-    product, needs = {}, {}
+    product, needs, fluid_ing = {}, {}, {}
     for n in machines:
         _c, prod, _i = _machine_cap(graph.nodes[n], dumper)
         product[n] = prod
-        needs[n] = _ingredients(graph.nodes[n], dumper)
+        typed = _ingredients(graph.nodes[n], dumper, types=True)
+        needs[n] = {i: a for i, (a, t) in typed.items() if t == "item"}
+        fl = [i for i, (a, t) in typed.items() if t == "fluid"]
+        if len(fl) > 1:
+            raise BankInapplicable(f"stage {n} needs {len(fl)} fluids (template "
+                                   f"pipes fit 1)")
+        fluid_ing[n] = fl[0] if fl else None
+        if fl and any(t == "item" and i not in raw_items_probe(graph)
+                      for i, (a, t) in typed.items()):
+            raise BankInapplicable(
+                f"stage {n}: fluid stage consuming another stage's product "
+                f"(trunk rows break bus adjacency -- pending)")
+        if fl:
+            srcs = [s for s, nd in graph.nodes.items()
+                    if nd.kind is NodeKind.FLUID and nd.item == fl[0]]
+            if not srcs:
+                raise BankInapplicable(f"fluid {fl[0]!r} has no boundary source")
 
     order, seen = [], set()
 
@@ -173,19 +193,19 @@ def plan_dag(graph: Graph, dumper):
             raise BankInapplicable(
                 f"stage {n} needs {n_ports} output rows (arm reach fits "
                 f"{max_ports})")
-    return order, raws, outputs[0], product, needs, sources, rows
+    return order, raws, outputs[0], product, needs, sources, rows, fluid_ing
 
 
 _ARM_RATE = {"farN": LONG_ARM_PICK, "nearN": ARM_BELT_PICK, "nearS": ARM_BELT_PICK}
 
 
-def _stage_slots(cap, needs, assign, out_amount, has_s_input):
+def _stage_slots(cap, needs, assign, out_amount, has_s_input, n_face_slots=3):
     """Best per-machine arm allocation for the row assignment. N face: 3 slots
     (farN long + nearN normal). S face: 3 slots shared by nearS input arms and the
     output arms (LONG when a nearS row exists -- they reach over it)."""
     best = None
-    for k_far in range(0, 4):
-        for k_near in range(0, 4 - k_far):
+    for k_far in range(0, n_face_slots + 1):
+        for k_near in range(0, n_face_slots + 1 - k_far):
             for k_sin in range(0, 3):
                 for k_out in range(1, 4 - k_sin):
                     x = cap * SAFETY
@@ -226,7 +246,7 @@ def compile_bank(graph: Graph, dumper="auto"):
         dumper = fv._fbsr_dumper()
     if dumper is None:
         raise RatesUnavailable("FBSR dumper unavailable")
-    stages, raws, out_node, product, needs, sources, row_assign = \
+    stages, raws, out_node, product, needs, sources, row_assign, fluid_ing = \
         plan_dag(graph, dumper)
 
     caps, out_amt = {}, {}
@@ -235,9 +255,15 @@ def compile_bank(graph: Graph, dumper="auto"):
         caps[n] = crafts
         out_amt[n] = items / crafts if crafts else 1.0
 
-    slots = {n: _stage_slots(caps[n], needs[n], row_assign[n], out_amt[n],
-                             has_s_input="nearS" in row_assign[n])
-             for n in stages}
+    slots = {}
+    for n in stages:
+        n_free = 3
+        if fluid_ing[n]:
+            n_free = 2 if graph.nodes[n].kind is not NodeKind.CHEMICAL else 2
+            # one N-face tile hosts the pipe drop (chem: left box; assembler: centre)
+        slots[n] = _stage_slots(caps[n], needs[n], row_assign[n], out_amt[n],
+                                has_s_input="nearS" in row_assign[n],
+                                n_face_slots=n_free)
 
     # ---- DAG unit demand --------------------------------------------------------------
     consumers: dict[str, list] = {n: [] for n in stages}
@@ -361,6 +387,10 @@ def compile_bank(graph: Graph, dumper="auto"):
             a = row_assign[n]
             r: dict = {}
             prev = stages[i - 1] if i else None
+            if fluid_ing[n]:
+                r["trunk"] = y
+                r["pair"] = y + 1
+                y += 2
             adj_far = (a.get("farN") and a["farN"][1] == ("stage", prev))
             if a.get("farN") and not adj_far:
                 r["farN"] = y
@@ -482,7 +512,8 @@ def compile_bank(graph: Graph, dumper="auto"):
             for slot in ("farN", "nearN", "nearS"):
                 ing = a.get(slot)
                 if ing and ing[1][0] == "raw":
-                    raw_rows_pending.setdefault(ing[1][1], []).append(r[slot])
+                    raw_rows_pending.setdefault(ing[1][1], []).append(
+                        (r[slot], slot == "nearN" and not fluid_ing[n]))
             xs = stage_xs[(n, b)]
             nxt = stages[i + 1] if i + 1 < len(stages) else None
             lh = sorted({c for c, _amt in consumers[n] if c != nxt})
@@ -515,7 +546,18 @@ def compile_bank(graph: Graph, dumper="auto"):
                 lay.add(PlacedEntity(_MACHINE_KINDS[graph.nodes[n].kind], x,
                                      r["mach"], recipe=graph.nodes[n].recipe,
                                      meta={"node": mname}))
-                face = [x, x + 1, x + 2]
+                proto_m = _MACHINE_KINDS[graph.nodes[n].kind]
+                box_x = None
+                if fluid_ing[n]:
+                    conns = _fluid_connections(proto_m, x, r["mach"], 0,
+                                               with_dir=True)
+                    ins = [(t, md) for t, fl, md in conns if fl == "input"]
+                    box_x = ins[0][0][0]           # left/centre input box column
+                    lay.add(PlacedEntity(PIPE_TO_GROUND, box_x, r["arm_in"],
+                                         direction=ins[0][1], meta={}))
+                    lay.add(PlacedEntity(PIPE_TO_GROUND, box_x, r["pair"],
+                                         direction=N, meta={}))
+                face = [fx for fx in (x, x + 1, x + 2) if fx != box_x]
                 fi = 0
                 for _ in range(sl["k_far"]):
                     lay.add(PlacedEntity(LONG_INSERTER, face[fi], r["arm_in"],
@@ -525,6 +567,7 @@ def compile_bank(graph: Graph, dumper="auto"):
                     lay.add(PlacedEntity(INSERTER, face[fi], r["arm_in"],
                                          direction=N, meta={"role": "in"}))
                     fi += 1
+                face = [x, x + 1, x + 2]
                 si = 0
                 for _ in range(sl["k_sin"]):
                     lay.add(PlacedEntity(INSERTER, face[si], r["arm_out"],
@@ -553,6 +596,15 @@ def compile_bank(graph: Graph, dumper="auto"):
             if a.get("farN") and a["farN"][1][0] == "stage" \
                     and not (i and a["farN"][1][1] == stages[i - 1]):
                 pass                               # long-haul dst: emitted below
+            if fluid_ing[n] and nb:
+                fname = f"fl_{fluid_ing[n]}_{b}_{i}"
+                g2.add_node(Node(fname, NodeKind.FLUID, item=fluid_ing[n]))
+                lay.add(PlacedEntity(FLUID_SOURCE, X_IN, r["trunk"],
+                                     item=fluid_ing[n], meta={"node": fname}))
+                for x in range(X_IN + 1, W):
+                    lay.add(PlacedEntity(PIPE, x, r["trunk"], meta={}))
+                for c in _block_slice(copies[n], per_block[n], b):
+                    g2.add_edge(fname, c, fluid=True)
             for p in power_slots + [width_slots]:
                 sub_positions.append((slot_x(p), r["mach"]))
             sub_positions.append((-8, r["mach"] + 1))
@@ -575,11 +627,14 @@ def compile_bank(graph: Graph, dumper="auto"):
             lay.add(PlacedEntity(BELT, x, y_dst, direction=W_DIR, meta=tag))
 
     # ---- raw boundaries ------------------------------------------------------------------
+    split_ct = 0
     for item, rows_y in sorted(raw_rows_pending.items()):
         demand = raw_unit.get(item, 0.0) * target
         n_boundary = max(1, math.ceil(demand / BELT_FULL))
-        rows_y = sorted(set(rows_y))
-        if n_boundary == 1 and len(rows_y) == 2:
+        near_ok = all(ok for _y, ok in rows_y)
+        rows_y = sorted({y for y, _ok in rows_y})
+        if n_boundary == 1 and len(rows_y) == 2 and near_ok:
+            split_ct += 1
             y0, y1 = rows_y
             input_ct += 1
             iname = f"in_{item}_{input_ct}"
@@ -592,7 +647,7 @@ def compile_bank(graph: Graph, dumper="auto"):
             lay.add(PlacedEntity(SPLITTER, X_IN + 3, y0, direction=E, meta=tag_i))
             for x in range(X_IN + 4, W):
                 lay.add(PlacedEntity(BELT, x, y0, direction=E, meta=tag_i))
-            dcol = X_IN - 3
+            dcol = X_IN - 1 - 2 * split_ct     # unique descent column per item
             lay.add(PlacedEntity(BELT, X_IN + 4, y0 + 1, direction=E, meta=tag_i))
             lay.add(PlacedEntity(BELT, X_IN + 5, y0 + 1, direction=S, meta=tag_i))
             lay.add(PlacedEntity(BELT, X_IN + 5, y0 + 2, direction=W_DIR,
@@ -679,7 +734,8 @@ def compile_bank(graph: Graph, dumper="auto"):
                     continue
                 if ing[1][0] == "raw":
                     reg = raw_rows_pending[ing[1][1]]
-                    iname = reg.get("iname") or reg["rows"][ypos[(n, b)][slot]]
+                    iname = (reg.get("iname") if isinstance(reg, dict) and
+                             reg.get("iname") else reg["rows"][ypos[(n, b)][slot]])
                     for c in block_copies:
                         g2.add_edge(iname, c)
                 else:
