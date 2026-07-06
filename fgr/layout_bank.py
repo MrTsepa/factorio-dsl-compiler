@@ -43,10 +43,14 @@ from .solver import LANE_HEADROOM, SAFETY, SolveError
 from . import fbsr_validation as fv
 
 # directions
-N, E, S, W = 0, 4, 8, 12
+N, E, S = 0, 4, 8
+W_DIR = 12
 _MACHINE_KINDS = {NodeKind.ASSEMBLER: ASSEMBLER, NodeKind.CHEMICAL: CHEMICAL,
                   NodeKind.FURNACE: FURNACE}
 POWER_PITCH = 15          # substation column every N machine slots (supply area 18)
+X_IN = -6                 # the INPUT column: every boundary chest sits here, outside
+#                           the factory body, so a player can box-select and replace
+#                           the scaffolding with real feeds in one edit
 
 
 class BankInapplicable(RuntimeError):
@@ -379,7 +383,11 @@ def compile_bank(graph: Graph, dumper="auto"):
             # (a substation reaches -8..+9 from its top-left; margins get their own)
             for p in power_slots + [width_slots]:
                 sub_positions.append((slot_x(p), y_mach))
-            sub_positions.append((-8, y_mach))
+            sub_positions.append((-8, y_mach + 1))     # west margin: powers the
+            #                                                loaders, within wire reach
+            #                                                of the field subs; the
+            #                                                descent column (-9) stays
+            #                                                one tile clear
         y += 4                                            # gap between blocks
 
     # ---- raw boundaries: consolidate input belts --------------------------------------
@@ -392,32 +400,39 @@ def compile_bank(graph: Graph, dumper="auto"):
     for item, rows in sorted(raw_rows_pending.items()):
         demand = raw_unit.get(item, 0.0) * target
         n_boundary = max(1, math.ceil(demand / BELT_FULL))
-        if n_boundary == 1 and len(rows) == 2:
+        near_only = all(role == "near" for _y, _b, _i, role in rows)
+        if n_boundary == 1 and len(rows) == 2 and near_only:
+            # near rows sit directly above their arm lane, so the two margin rows
+            # below (arm lane + machine band, empty west of the field) host the
+            # U-turn; a FAR-row consolidation would collide with the near belt
             split_ct += 1
-            bx = -12 - 4 * split_ct
             y0 = min(r[0] for r in rows)
             y1 = max(r[0] for r in rows)
             input_ct += 1
             iname = f"in_{item}_{input_ct}"
             g2.add_node(Node(iname, NodeKind.INPUT, item=item))
             tag_i = {"net": f"b:{iname}"}
-            lay.add(PlacedEntity(CHEST_INPUT, bx - 1, y0, item=item,
+            lay.add(PlacedEntity(CHEST_INPUT, X_IN, y0, item=item,
                                  meta={"node": iname}))
-            lay.add(PlacedEntity(LOADER, bx, y0, direction=E,
+            lay.add(PlacedEntity(LOADER, X_IN + 1, y0, direction=E,
                                  loader_type="output", meta=tag_i))
-            lay.add(PlacedEntity(BELT, bx + 2, y0, direction=E, meta=tag_i))
-            lay.add(PlacedEntity(SPLITTER, bx + 3, y0, direction=E, meta=tag_i))
+            lay.add(PlacedEntity(SPLITTER, X_IN + 3, y0, direction=E, meta=tag_i))
             # branch 1: straight east into row y0
-            for x in range(bx + 4, W):
+            for x in range(X_IN + 4, W):
                 lay.add(PlacedEntity(BELT, x, y0, direction=E, meta=tag_i))
-            # branch 2: east, CURVE south (curves keep both lanes), down, curve east
-            col = bx + 5
-            lay.add(PlacedEntity(BELT, bx + 4, y0 + 1, direction=E, meta=tag_i))
-            lay.add(PlacedEntity(BELT, col, y0 + 1, direction=S, meta=tag_i))
-            for yv in range(y0 + 2, y1):
-                lay.add(PlacedEntity(BELT, col, yv, direction=S, meta=tag_i))
-            lay.add(PlacedEntity(BELT, col, y1, direction=E, meta=tag_i))
-            for x in range(col + 1, W):
+            # branch 2: U-turn west through the free margin rows (curves keep both
+            # lanes), descend the column west of the chest line, re-enter row y1
+            dcol = X_IN - 3
+            lay.add(PlacedEntity(BELT, X_IN + 4, y0 + 1, direction=E, meta=tag_i))
+            lay.add(PlacedEntity(BELT, X_IN + 5, y0 + 1, direction=S, meta=tag_i))
+            lay.add(PlacedEntity(BELT, X_IN + 5, y0 + 2, direction=W_DIR, meta=tag_i))
+            for x in range(X_IN + 4, dcol, -1):
+                lay.add(PlacedEntity(BELT, x, y0 + 2, direction=W_DIR, meta=tag_i))
+            lay.add(PlacedEntity(BELT, dcol, y0 + 2, direction=S, meta=tag_i))
+            for yv in range(y0 + 3, y1):
+                lay.add(PlacedEntity(BELT, dcol, yv, direction=S, meta=tag_i))
+            lay.add(PlacedEntity(BELT, dcol, y1, direction=E, meta=tag_i))
+            for x in range(dcol + 1, W):
                 lay.add(PlacedEntity(BELT, x, y1, direction=E, meta=tag_i))
             for yy, b, i, role in rows:
                 copies[("rawrow", b, i, role)] = iname
@@ -426,11 +441,11 @@ def compile_bank(graph: Graph, dumper="auto"):
                 input_ct += 1
                 iname = f"in_{item}_{input_ct}"
                 g2.add_node(Node(iname, NodeKind.INPUT, item=item))
-                lay.add(PlacedEntity(CHEST_INPUT, -5, yy, item=item,
+                lay.add(PlacedEntity(CHEST_INPUT, X_IN, yy, item=item,
                                      meta={"node": iname}))
-                lay.add(PlacedEntity(LOADER, -4, yy, direction=E,
+                lay.add(PlacedEntity(LOADER, X_IN + 1, yy, direction=E,
                                      loader_type="output", meta={"net": f"b:{iname}"}))
-                for x in range(-2, W):
+                for x in range(X_IN + 3, W):
                     lay.add(PlacedEntity(BELT, x, yy, direction=E,
                                          meta={"net": f"b:{iname}"}))
                 copies[("rawrow", b, i, role)] = iname
@@ -479,7 +494,9 @@ def compile_bank(graph: Graph, dumper="auto"):
         seen_sub.add(key)
         lay.add(PlacedEntity(SUBSTATION, sx_, sy_, meta={}))
     if sub_positions:
-        lay.add(PlacedEntity(EEI, -12, sub_positions[-1][1], meta={}))
+        lay.add(PlacedEntity(EEI, X_IN - 1, min(s[1] for s in sub_positions) - 7,
+                             meta={}))                     # same line as the inputs,
+        #                                                    above the build
 
     # ---- expanded spec edges (what the layout physically realizes) ----------------------
     raw_rows = {k: v for k, v in copies.items() if isinstance(k, tuple)}
