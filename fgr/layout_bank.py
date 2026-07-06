@@ -169,6 +169,10 @@ def plan_dag(graph: Graph, dumper):
             assign[slot] = pool.pop(0)
         if pool:
             raise BankInapplicable(f"stage {n}: more belt inputs than template rows")
+        if "farN" in assign and "nearN" not in assign and adj:
+            # bus-only stage: with no near row between, the adjacent bus sits at
+            # depth 1 -- it belongs on the NEAR slot (normal arms)
+            assign["nearN"] = assign.pop("farN")
         rows[n] = assign
 
     # OUTPUT-port gate: consumers = adjacent (bus at depth 1/2) + long-hauls; the
@@ -405,14 +409,17 @@ def compile_bank(graph: Graph, dumper="auto"):
                     r[("pair", fi_)] = y + 1
                     y += 2
             adj_far = (a.get("farN") and a["farN"][1] == ("stage", prev))
+            adj_near = (a.get("nearN") and a["nearN"][1] == ("stage", prev))
             if a.get("farN") and not adj_far:
                 r["farN"] = y
                 y += 1
             elif adj_far:
                 r["farN"] = ypos[(prev, b)]["bus"]
-            if a.get("nearN"):
+            if a.get("nearN") and not adj_near:
                 r["nearN"] = y
                 y += 1
+            elif adj_near:
+                r["nearN"] = ypos[(prev, b)]["bus"]
             r["arm_in"] = y
             r["mach"] = y + 1
             r["arm_out"] = y + 4
@@ -838,10 +845,11 @@ def compile_bank(graph: Graph, dumper="auto"):
                                                 ypos[(n, b)][slot] == src_r["bus"]) \
                         else src_r.get(("lh", n))
                     feeders = set(port_feeders.get((src, port_row), []))
-                    adjacent = (i and src == stages[i - 1] and slot == "farN")
+                    adjacent = (i and src == stages[i - 1]
+                                and slot in ("farN", "nearN"))
                     if adjacent:
                         pxs, cxs = stage_xs[(src, b)], stage_xs[(n, b)]
-                        k_far = slots[n]["k_far"]
+                        k_far = slots[n]["k_far" if slot == "farN" else "k_near"]
                         for pj, p in enumerate(src_copies):
                             if p not in feeders:
                                 continue
