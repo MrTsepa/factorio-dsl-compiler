@@ -1,0 +1,13 @@
+# OUTPUT-DRIVEN, two stages: 1 electronic circuit per second.
+# Circuits eat 3 cables/craft -> both stages multi-copy, each circuit machine
+# gets its own dedicated cable lane (multi-arm as separate same-product lanes).
+input copper : copper-plate
+input iron : iron-plate
+assembler cable : copper-cable
+assembler circuit : electronic-circuit
+output chips @ 1/s
+
+copper -> cable
+cable -> circuit
+iron -> circuit
+circuit -> chips

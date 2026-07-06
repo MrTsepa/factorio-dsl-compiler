@@ -1,0 +1,11 @@
+# OUTPUT-DRIVEN at scale: 1.5 red science per second (a full lab row's appetite).
+input copper : copper-plate
+input iron : iron-plate
+assembler gear : iron-gear-wheel
+assembler red : automation-science-pack
+output out @ 1.5/s
+
+iron -> gear
+copper -> red
+gear -> red
+red -> out

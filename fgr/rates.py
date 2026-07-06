@@ -55,8 +55,11 @@ def _machine_cap(node, dumper):
     return crafts, res.get("name", node.recipe), crafts * res.get("amount", 1)
 
 
-def _ingredients(node, dumper):
+def _ingredients(node, dumper, types=False):
     r = _dump(node.recipe, "recipe", dumper)
+    if types:
+        return {i["name"]: (i.get("amount", 1), i.get("type", "item"))
+                for i in r.get("ingredients", [])}
     return {i["name"]: i.get("amount", 1) for i in r.get("ingredients", [])}
 
 

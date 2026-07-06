@@ -1,0 +1,12 @@
+# FLUIDS: 0.5 batteries/s from chemical plants -- sulfuric acid arrives by pipe
+# (2.0 fluid segments are uncapacitated, so only the plants need sizing).
+input iron : iron-plate
+input copper : copper-plate
+fluid acid : sulfuric-acid
+chemical battery : battery
+output out @ 0.5/s
+
+iron -> battery
+copper -> battery
+acid ~> battery
+battery -> out

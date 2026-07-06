@@ -244,6 +244,7 @@ def card(rec):
       <p class='sub'>{rec.get('blurb', '')}</p>
       <div class='sub muted'>{meta}</div>
       {rates_html(rec)}
+      {plan_html(rec)}
       {img}
       <div class='under'>
         {copy_btn(rec)}
@@ -290,6 +291,102 @@ SHOWCASE = [
 ]
 
 
+SIZED_BLURBS = {
+    "gears_belt": "INPUT-driven: <b>one belt of iron in — max gears out.</b> The solver "
+        "derives 17 machines (each honestly capped by its single inserter arm, not the "
+        "machine's 1.5/s) and the trunk enters at the end of the bank so every machine "
+        "gets a direct pickup.",
+    "circuits_1ps": "OUTPUT-driven, two stages: <b>1 electronic circuit / second.</b> "
+        "Circuits eat 3 cables per craft, so both stages go multi-copy and each circuit "
+        "machine gets its own dedicated cable lane — multi-arm feeding expressed as "
+        "separate same-product lanes.",
+    "redsci_15": "OUTPUT-driven at scale: <b>1.5 red science / second</b> — 11 science "
+        "assemblers fed by a 4-machine gear bank, input belt count derived.",
+    "greensci_05": "DEEP CHAIN, six stages: <b>0.5 green science / second</b> — shared "
+        "iron, reconvergent gears. The honest one: measured throughput lands at ~66% of "
+        "plan because multi-column nets still route interior tap arms (splitter support "
+        "is the tracked fix). The pipeline catches its own gaps.",
+    "battery_05": "FLUIDS: <b>0.5 batteries / second</b> from chemical plants — acid "
+        "arrives by pipe (2.0 segments are uncapacitated), so only the plants and the "
+        "item feeds needed sizing.",
+}
+
+
+def sized_cards():
+    """Cards for examples/sized/: sizing plan + measured-in-game badge + a blueprint
+    whose in-game description carries the full plan."""
+    import json as _json
+    from fgr.solver import solve
+    from fgr.rates import RatesUnavailable
+    results = {}
+    rp = ROOT / "out" / "rate_study" / "sized_results.json"
+    if rp.exists():
+        results = _json.loads(rp.read_text())
+    cards = []
+    for p in sorted((ROOT / "examples" / "sized").glob("*.fgr")):
+        text = p.read_text()
+        g = parse(text)
+        try:
+            g2, plan = solve(g)
+        except (RatesUnavailable, Exception) as ex:      # noqa: BLE001
+            print(f"  ! sized {p.stem}: {ex}")
+            continue
+        rec = process(p.stem, text, render=False)
+        lay = compile_graph(g2)
+        rep2 = verify(g2, lay)
+        rec["status"] = "PASS" if rep2.ok else "VERIFY-FAIL"
+        rec["checks"] = [(c.name, c.ok, c.detail, c.severity) for c in rep2.checks]
+        rec["entities"] = len(lay.entities)
+        meas = (results.get(p.stem) or {}).get("measured_per_s") or {}
+        desc_lines = ["sized by fgr solve"]
+        for o, t in plan["target_per_s"].items():
+            e = plan["expected_actual_per_s"].get(o)
+            desc_lines.append(f"{o}: target >= {t}/s, expected ~{e}/s")
+        for it, v in meas.items():
+            desc_lines.append(f"measured in-game: {it} {v}/s")
+        for n, m in plan["machines"].items():
+            desc_lines.append(f"{n}: {m['copies']}x ({m['binding']}-bound)")
+        desc_lines.append("input lanes: " + ", ".join(
+            f"{k}x{v}" for k, v in plan["input_lanes"].items()))
+        rec["bp"] = to_blueprint_string(lay, p.stem, description="\n".join(desc_lines))
+        try:
+            from fgr.render import render_blueprint_string
+            png = OUT / f"render_{p.stem}.png"
+            render_blueprint_string(rec["bp"], png)
+            rec["png"] = _embed_jpeg(png)
+        except Exception as ex:                          # noqa: BLE001
+            rec["render_err"] = str(ex)[:200]
+        rec["blurb"] = SIZED_BLURBS.get(p.stem, "")
+        rec["plan"] = plan
+        rec["measured"] = meas
+        cards.append(rec)
+    return cards
+
+
+def plan_html(rec):
+    plan = rec.get("plan")
+    if not plan:
+        return ""
+    rows = []
+    for n, m in plan["machines"].items():
+        rows.append(f"<tr><td class='mono'>{esc(n)}</td><td>{m['copies']}×</td>"
+                    f"<td>{m['per_copy_crafts_per_s']}/s each</td>"
+                    f"<td>{esc(m['binding'])}-bound</td></tr>")
+    lanes = ", ".join(f"{esc(k)} ×{v}" for k, v in plan["input_lanes"].items())
+    tgt = []
+    for o, t in plan["target_per_s"].items():
+        e = plan["expected_actual_per_s"].get(o)
+        tgt.append(f"target ≥ <b>{t}/s</b> · expected ~<b>{e}/s</b>")
+    meas = rec.get("measured") or {}
+    mline = "".join(f"<div class='rline'>measured in-game: {esc(it)} <b>{v}/s</b></div>"
+                    for it, v in meas.items())
+    return (f"<div class='rates'><div class='rtitle'>&#9881; sizing plan "
+            f"<span class='muted'>(embedded in the blueprint tooltip)</span></div>"
+            f"<div class='rline'>{' · '.join(tgt)}</div>{mline}"
+            f"<table>{''.join(rows)}</table>"
+            f"<div class='rline muted'>input lanes: {lanes}</div></div>")
+
+
 def build():
     print("rendering showcase ...")
     cases = []
@@ -317,6 +414,9 @@ def build():
                     + "; ".join(c.detail for c in bad))
             rec["game_accurate"] = True
         cases.append(rec)
+
+    print("sized builds ...")
+    sized = sized_cards()
 
     print("validate-model ...")
     try:
@@ -367,6 +467,15 @@ sits on a live, wired power network. If it passes, it runs.</p>
 </div>
 
 {''.join(card(r) for r in cases)}
+
+<h2>Give it a rate — the solver sizes the factory</h2>
+<p class='sub'>Annotate an input (<code>@ 1 belt</code>) or an output
+(<code>@ 0.5/s</code>) and <code>fgr solve</code> derives machine counts, inserter
+arms and the number of input belts — then the layout is compiled, verified, and
+<b>measured in the real game</b> (headless). Every machine inside is
+vanilla-buildable; the boundary scaffolding (chest + loader belts, power feed) is
+what you replace when splicing into a real base.</p>
+{''.join(card(r) for r in sized)}
 
 <h2>Trust, but verify the verifier</h2>
 <div class='card'>

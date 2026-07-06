@@ -63,12 +63,17 @@ def solve(graph: Graph, dumper="auto") -> tuple[Graph, dict]:
 
     machines = {n: nd for n, nd in graph.nodes.items()
                 if nd.kind in _MACHINE_KINDS and nd.recipe}
-    caps, product, out_amount, needs = {}, {}, {}, {}
+    caps, product, out_amount, needs, item_needs = {}, {}, {}, {}, {}
     for n, nd in machines.items():
         crafts, prod, items = _machine_cap(nd, dumper)
         caps[n], product[n] = crafts, prod
         out_amount[n] = items / crafts if crafts else 1.0
-        needs[n] = _ingredients(nd, dumper)
+        typed = _ingredients(nd, dumper, types=True)
+        needs[n] = {ing: amt for ing, (amt, _t) in typed.items()}
+        # FLUID ingredients arrive by pipe (2.0 segments: uncapacitated) -- only ITEM
+        # ingredients cost inserter arms (a 20-acid recipe once got arm-limited to
+        # 0.047 crafts/s and the solver built 12 plants where 3 sufficed)
+        item_needs[n] = {ing: amt for ing, (amt, t) in typed.items() if t == "item"}
     for n, nd in graph.nodes.items():
         if nd.kind in (NodeKind.INPUT, NodeKind.FLUID):
             product[n] = nd.item
@@ -142,7 +147,8 @@ def solve(graph: Graph, dumper="auto") -> tuple[Graph, dict]:
             required[n] = required.get(n, 0.0) + c * target[o]
     eff, copies, per_copy = {}, {}, {}
     for n, r in required.items():
-        arm_in = min((ARM_BELT_PICK / amt for amt in needs[n].values()), default=caps[n])
+        arm_in = min((ARM_BELT_PICK / amt for amt in item_needs[n].values()),
+                     default=caps[n])
         arm_out = ARM_CHEST_PICK / out_amount[n]
         eff[n] = min(caps[n], arm_in, arm_out) * SAFETY
         copies[n] = max(1, math.ceil(r / eff[n]))
@@ -187,9 +193,11 @@ def solve(graph: Graph, dumper="auto") -> tuple[Graph, dict]:
         return [n]
 
     def copy_rate(orig):
-        """items/s ONE copy of original node `orig` can supply."""
+        """items/s ONE copy of original node `orig` can supply, at its MAX (eff)
+        rate -- packing against the average per-copy rate fragments and fails even
+        when total supply exactly covers total demand."""
         if orig in per_copy:
-            return per_copy[orig] * out_amount[orig]
+            return eff[orig] * out_amount[orig]
         if graph.nodes[orig].kind is NodeKind.INPUT:
             return BELT_FULL
         return float("inf")                        # fluid source
@@ -208,23 +216,31 @@ def solve(graph: Graph, dumper="auto") -> tuple[Graph, dict]:
             for k, s in enumerate(srcs):
                 g2.add_edge(s, dsts[k % len(dsts)])
             continue
-        # machine feeds: each consumer copy draws its per-ingredient need from ONE
-        # supplier copy (one arm); pack demand into supplier capacity first-fit
+        # machine feeds: pack each consumer copy's per-ingredient draw into supplier
+        # lane capacity. A draw exceeding one lane's supply is SPLIT across lanes --
+        # each extra lane is an extra inserter arm on the consumer (distinct producer
+        # copies, since the router dedupes same-pair edges).
         ing = product[e.src]
         share = 1.0 / max(len(suppliers(e.dst, ing)), 1)
         budget = {s: copy_rate(e.src) for s in srcs}
         si = 0
         for d in dsts:
             need = per_copy.get(e.dst, 0.0) * needs.get(e.dst, {}).get(ing, 0.0) * share
-            spins = 0
-            while budget[srcs[si]] < need - 1e-9 and spins <= len(srcs):
-                si = (si + 1) % len(srcs)
-                spins += 1
-            if spins > len(srcs):
-                raise SolveError(f"cannot pack {e.dst} copies onto {e.src} lanes "
-                                 f"(need {need:.2f}/s per copy)")
-            g2.add_edge(srcs[si], d)
-            budget[srcs[si]] -= need
+            guard = 0
+            while need > 1e-9:
+                s = srcs[si]
+                take = min(budget[s], need)
+                if take > 1e-9:
+                    g2.add_edge(s, d)
+                    budget[s] -= take
+                    need -= take
+                if need > 1e-9 or budget[s] <= 1e-9:
+                    si = (si + 1) % len(srcs)
+                    guard += 1
+                    if guard > 2 * len(srcs) + 2:
+                        raise SolveError(
+                            f"cannot pack {e.dst} demand onto {e.src} lanes "
+                            f"({need:.3f}/s unplaced -- supply too tight)")
         # interior consumers must keep supplier lanes separate (arms!)
         if graph.nodes[e.dst].kind in _MACHINE_KINDS:
             for d in dsts:

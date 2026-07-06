@@ -1,0 +1,20 @@
+# DEEP CHAIN: 0.5 green science/s -- six production stages, shared iron,
+# reconvergent intermediates (gears feed both inserters and belts).
+input iron : iron-plate
+input copper : copper-plate
+assembler cable : copper-cable
+assembler circuit : electronic-circuit
+assembler gear : iron-gear-wheel
+assembler arm : inserter
+assembler belt : transport-belt
+assembler green : logistic-science-pack
+output out @ 0.5/s
+
+copper -> cable
+cable -> circuit
+iron -> circuit, gear, arm, belt
+gear -> arm, belt
+circuit -> arm
+arm -> green
+belt -> green
+green -> out
