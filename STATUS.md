@@ -42,11 +42,14 @@ comparison). Live numbers: run the script yourself.
 
 | generator | pass rate | timeouts | avg compile\* | total entities\* | belt turns\* | tunnel crossings\* |
 |---|---|---|---|---|---|---|
-| v1 (A\* rip-up) | 118 / 155 | 11 | 472 ms | 66,687 | 4,113 | 2,523 |
-| v2 (lane fabric) | 132 / 155 | 0 | **28 ms** | 265,618 | 1,867 | 9,880 |
-| **v3 (global router)** | **155 / 155** | **0** | 133 ms | **60,104** | **211** | **2,297** |
+| v1 (A\* rip-up) | 90 / 155 | 19 | 1,371 ms | 40,284 | 2,313 | 1,253 |
+| v2 (lane fabric) | 99 / 155 | 3 | **108 ms** | 67,338 | 706 | 3,568 |
+| **v3 (global router)** | **153 / 155**\*\* | 2\*\* | 623 ms | **57,542** | **223** | **2,304** |
 
-<sub>\*each on that generator's own passing set.</sub>
+<sub>\*each on that generator's own passing set. \*\*the two "timeouts" are `scale_5`/
+`scale_6`, the largest synthetic giants: both VERIFY in-process (~25-40s) but exceed the
+comparison's 10s per-case cap -- the in-process corpus is 155/155. They react oppositely
+to in-fabric power obstacles; negotiation-aware power placement is the tracked fix.</sub>
 
 - **Completeness.** v3 passes the entire battery — including every case in v2's tracked
   tail (congested belt risers: `fanin_asm_*`, `reconverge_*`, `butterfly_*`, `bus_4`;
@@ -55,15 +58,18 @@ comparison). Live numbers: run the script yourself.
   lane-mixing check costs v2 six passes (its collectors merge different products onto
   one lane — the in-game jam the check exists to catch); v1 loses those six plus seven
   more to side-loadable underground ends (belts it dead-ends against foreign tunnels
-  are real feeds in-game). v3 routes the same cases with same-product lanes,
-  lane-separated pairs, and tunnel-aware weld checks instead.
+  are real feeds in-game). The POWER check costs both baselines a further large slice:
+  their post-routing overlay can't find free 2×2 ground on dense layouts, so entities
+  stay dark (v3 plans power BEFORE routing — substations claim ground while it's open
+  and the router dives under them). v3 routes the same cases with same-product lanes,
+  lane-separated pairs, tunnel-aware weld checks, and a planned grid instead.
 - **Shape.** v3 is the *leanest* of the three: ~5.4× fewer entities than v2 on the corpus,
   and fewer even than v1 (which bought compactness with search). Belt turns collapse to 211
   total vs v2's 1,867 — merges and flexible pins remove almost every needless jog. Tunnel
   crossings are the lowest of the three, and belts never tunnel across open ground (a dive
   only wins when the surface is actually blocked).
-- **Speed.** v3 averages 133 ms — ~5× v2, ~3.5× faster than v1, worst case under 5 s,
-  never times out. The negotiation loop is bounded (20 rounds, early stall
+- **Speed.** v3 averages ~600 ms — the power planning, wired blueprints and denser
+  legality rules cost real work; worst case ~40 s (`scale_5`, the 100-machine giant). The negotiation loop is bounded (20 rounds, early stall
   cutoff) and every search is A\* over a finite field, so there is no hang mode.
 - **Determinism.** Same input → byte-identical layout (no RNG, no wall clock; verified on
   the hard cases).

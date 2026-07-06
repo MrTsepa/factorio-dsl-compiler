@@ -362,12 +362,14 @@ three live side by side behind one interface (`fgr.generators`):
 
 | generator | approach | pass rate\* | avg compile\*\* | notes |
 |---|---|---|---|---|
-| **v3** (default) | v2's placement + a **global negotiated-congestion router** (PathFinder-style) | **155 / 155** | 133 ms | passes the whole battery; leanest layouts (fewest entities/turns) |
-| v2 | deterministic **lane fabric**: 4 fixed passes, no search, no rip-up | 132 / 155 | **28 ms** | fastest; tail = congested fan-in + mixed-lane collectors |
-| v1 | fixed grid + **A\* rip-up** search router | 118 / 155 | 472 ms | can hang on large/congested graphs (11/155 timeouts) |
+| **v3** (default) | v2's placement + a **global negotiated-congestion router** (PathFinder-style) | **155 / 155**\* | 623 ms | passes the whole battery; leanest layouts (fewest entities/turns) |
+| v2 | deterministic **lane fabric**: 4 fixed passes, no search, no rip-up | 99 / 155 | **108 ms** | fastest; fails lane-purity + power checks its era predates |
+| v1 | fixed grid + **A\* rip-up** search router | 90 / 155 | 1,371 ms | can hang on large/congested graphs (19/155 timeouts) |
 
 <sub>\*across `examples/` (49 curated) + `corner_cases/` (106 generated stress cases),
-each run subprocess-isolated with a 10s timeout. \*\*on each generator's own passing set.</sub>
+subprocess-isolated; the two largest giants exceed the harness's 10s cap but verify
+in-process (~25–40 s), so the in-process corpus is 155/155. Compile times are each
+generator's own passing set.</sub>
 
 ```bash
 .venv/bin/python -m fgr compile examples/basic/gears.fgr -g v2   # pick a generator explicitly

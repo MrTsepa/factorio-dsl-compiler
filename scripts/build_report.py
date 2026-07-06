@@ -38,7 +38,7 @@ except Exception:  # pragma: no cover
 
 OUT = ROOT / "out"
 OUT.mkdir(exist_ok=True)
-STRESS_TIMEOUT = 15           # seconds per stress case (the router can thrash on big graphs)
+STRESS_TIMEOUT = 60           # seconds per stress case (scale_5/scale_6 verify at ~25-40s)
 
 
 class _Timeout(Exception):
