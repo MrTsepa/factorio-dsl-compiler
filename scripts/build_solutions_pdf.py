@@ -28,6 +28,9 @@ from fgr.verify import verify  # noqa: E402
 
 OUT_DIR = ROOT / "out" / "solutions_pdf"
 NODE_CAP = 140
+ENT_CAP = 120_000       # verify/oracle cost explodes past this (the megabase class;
+#                         per-tier targets are the honest fix, straight-run collapse
+#                         in the oracle the technical one)
 
 
 def evaluate(fp: Path):
@@ -47,6 +50,11 @@ def evaluate(fp: Path):
                 rec.update(status="TOO-BIG", err=f"{len(g2.nodes)} nodes")
                 return rec
             lay = compile_graph(g2)
+        if len(lay.entities) > ENT_CAP:
+            rec.update(status="HUGE", entities=len(lay.entities),
+                       err=f"{len(lay.entities)} entities -- beyond practical "
+                       f"verification; a full belt of this item is a megabase")
+            return rec
         rep = verify(g2, lay)
         if not rep.ok:
             rec.update(status="VERIFY-FAIL",
