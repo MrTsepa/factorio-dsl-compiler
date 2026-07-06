@@ -101,7 +101,7 @@ handles same-product merges, which caps the blast radius); verifier capacity che
 must model lane merges correctly (sum of tributary flows ≤ lane cap at every tile —
 computable on the existing flow graph).
 
-## Stage D — simulate the blueprint in the real game (design)
+## Stage D — simulate the blueprint in the real game (IMPLEMENTED)
 
 The blueprints became **self-contained runnable worlds** the moment power (EEI),
 infinity chests and loaders landed — which makes true end-to-end simulation cheap:
@@ -121,11 +121,32 @@ Mechanics (all standard tooling):
    (assert within tolerance), plus **warm-up time** to steady state — exactly the
    "gears took a while to reach red science" effect, quantified.
 
-What it needs: a Factorio binary path (the game is already installed here — the FBSR
-bake came from it), the scenario generator (~150 lines of Lua + Python runner), and a
-tolerance policy. What it buys: the verifier chain becomes *spec → physical topology
-(oracle) → game-accurate recipes (dumps) → actual measured throughput (the game)* —
-there is no stronger ground truth available.
+Implementation: `scripts/get_factorio.sh` installs the **free headless server build**
+(no account; pinned via `https://factorio.com/get-download/<ver>/headless/linux64`)
+into `out/_factorio_sim/`; `scripts/simulate.py` runs it natively on Linux or through
+docker (OrbStack/Rosetta) on macOS, against a **private write dir** (never a real
+game install), expansions disabled, recipes enabled *without* researching techs (tech
+grants inserter-capacity bonuses a fresh world doesn't have — the rates model targets
+fresh-world hardware).
+
+**First results** (measured slope of output-chest fill, warm-up discarded):
+
+| case | predicted sustained | measured | error | warm-up (first item) |
+|---|---|---|---|---|
+| gears | 0.42/s | **0.454/s** | +8% | 9 s |
+| circuits | 0.28/s | **0.286/s** | +2% | 15 s |
+| science_3 (red) | 0.084/s | **0.092/s** | +9% | 318 s |
+| science_3 (military) | 0.084/s | **0.094/s** | +11% | 89 s |
+
+The model holds: every measured rate sits between the sustained estimate and the
+machine limit, slightly above sustained (the pure-rotation swing model is a touch
+conservative). And the warm-up column quantifies exactly the effect observed by hand
+in-game: on shared tapped belts, downstream consumers fill LAST — red science's first
+pack arrives after five minutes while military's arrives at 89 s. 2 minutes of game
+time simulate in ~2 s of wall time.
+
+The verifier chain is now *spec → physical topology (oracle) → game-accurate recipes
+(dumps) → measured throughput (the game itself)* — no stronger ground truth exists.
 
 (An in-repo discrete-event simulator was considered and parked: fast and CI-friendly,
 but it reimplements belt/inserter physics that WILL drift from the game; headless runs
@@ -137,7 +158,8 @@ environments without a game install.)
 1. ✅ Stage A (this commit): metadata + bottleneck honesty on every blueprint.
 2. Stage B solver + verifier capacity check — pure math + oracle, no layout risk.
 3. Stage C banks — behind a flag, graded case-by-case like every generator change.
-4. Stage D headless simulation — closes the loop: predicted rates vs measured rates.
+4. ✅ Stage D headless simulation — closed the loop: predictions within 2–11% of
+   game-measured rates on the first three cases.
 
 ## Sources
 
