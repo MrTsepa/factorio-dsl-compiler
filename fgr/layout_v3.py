@@ -212,19 +212,28 @@ def _fluid_tag(graph, n):
 def _build_nets(graph: Graph, bodies) -> tuple[list[_BeltNet], list[_FluidNet]]:
     item_edges = [e for e in graph.edges if not e.fluid]
     belt_nets = []
-    by_src: dict[str, list] = {}
+    # one net per (producer, output port): each port is a separate physical tree
+    # with its own root inserter -- the rate solver's "k output arms" mechanism
+    by_port: dict[tuple, dict] = {}
     for e in item_edges:
-        by_src.setdefault(e.src, []).append(e.dst)
+        slot = by_port.setdefault((e.src, getattr(e, "port", 0)), {})
+        slot[e.dst] = max(slot.get(e.dst, 1), getattr(e, "arms", 1))
     for p in graph.nodes:                        # graph order -> deterministic
-        if p not in by_src:
+        ports = sorted(k[1] for k in by_port if k[0] == p)
+        if not ports:
             continue
         px, py = bodies[p].center
 
         def dist(c):
             cx, cy = bodies[c].center
             return abs(cx - px) + abs(cy - py)
-        consumers = sorted(dict.fromkeys(by_src[p]), key=lambda c: (dist(c), c))
-        belt_nets.append(_BeltNet(f"b:{p}", p, consumers, _fluid_tag(graph, p)))
+        for port in ports:
+            slot = by_port[(p, port)]
+            consumers = []
+            for c in sorted(slot, key=lambda c: (dist(c), c)):
+                consumers.extend([c] * slot[c])  # k arms = k routed legs = k accepts
+            name = f"b:{p}" if port == 0 else f"b:{p}.{port}"
+            belt_nets.append(_BeltNet(name, p, consumers, _fluid_tag(graph, p)))
 
     # Fluid nets: same-fluid connected components of the DECLARED edges -- but merged
     # only when the component is a full biclique (every producer x consumer pair is
@@ -624,10 +633,17 @@ def _leaf_dir(ctx, state, net_id, tile, din, via, pres, prefer_side=False):
         perp = [d for d in CARDINALS if d not in (din, OPPOSITE[din])]
         cand = perp + [din] if prefer_side else [din] + perp
     best = None
+    my_tag = state.plans[net_id].tag if net_id in state.plans else None
     for e in cand:
         pen = sum(pres for _n, m in push if e != OPPOSITE[m])
         front = (tile[0] + DIR_DELTA[e][0], tile[1] + DIR_DELTA[e][1])
         if _accepting(state, net_id, front, e):
+            c = state.carrier.get(front)
+            other = state.plans[c[0]].tag if c and c[0] in state.plans else None
+            if other is not None and other != my_tag:
+                continue                # a terminal spilling into a DIFFERENT product's
+                #                         carrier can never be priced away (the mix is
+                #                         verifier-fatal); forbid the landing outright
             pen += pres
         if pen == 0:
             return (e, 0)
@@ -1262,7 +1278,10 @@ def _negotiate(ctx: _Ctx, belt_nets, fluid_nets):
 
     best_plans, best_score = None, (1 << 30)
     stall = 0
-    for _round in range(MAX_ROUNDS):
+    rounds = MAX_ROUNDS if not ctx.graph.no_merge else max(MAX_ROUNDS, 48)
+    # solver-sized graphs run far more nets (ports x arms) than hand specs; a lone
+    # weld surviving 20 rounds on a 90-net field is budget, not a livelock
+    for _round in range(rounds):
         overused, weld_nets, weld_pairs, weld_tiles, orphans, unrouted = _audit(ctx, state)
         score = 3 * len(overused) + 3 * len(weld_tiles) + len(orphans) + 5 * len(unrouted)
         if score < best_score:
@@ -1475,7 +1494,9 @@ def compile_graph(graph: Graph, vgap: int | None = None) -> Layout:
     from .verify import verify                    # lazy: verify imports layout modules
     # vgap only spaces stacked FLUID machines; without fluid edges every gap compiles
     # to the same geometry, so escalation would be 3x wasted work.
-    gaps = (FLUID_VGAP, 6, 10) if any(e.fluid for e in graph.edges) else (FLUID_VGAP,)
+    gaps = ((FLUID_VGAP, 6, 10)
+            if any(e.fluid for e in graph.edges) or graph.no_merge
+            else (FLUID_VGAP,))
     best, best_score = None, (1 << 30)
     for g in gaps:
         lay = _compile_at(graph, g)

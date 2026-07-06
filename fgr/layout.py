@@ -258,7 +258,11 @@ def _assign_rows(graph, col, vgap=FLUID_VGAP):
     indeg: dict[str, int] = {}
     for e in graph.edges:
         if not e.fluid:
-            indeg[e.dst] = indeg.get(e.dst, 0) + 1
+            # count ARMS, not edges: a rate-solver edge with arms=3 lands three
+            # inserters on the consumer; extra output ports crowd the producer too
+            indeg[e.dst] = indeg.get(e.dst, 0) + getattr(e, "arms", 1)
+            if getattr(e, "port", 0) > 0:
+                indeg[e.src] = indeg.get(e.src, 0) + 1
 
     def half(n):                                   # half-height (clearance each side)
         return SIZE[_node_proto(graph, n, fluid_sinks)][1] // 2
@@ -270,6 +274,13 @@ def _assign_rows(graph, col, vgap=FLUID_VGAP):
     # body, and the extra room de-congests the pipe router (which routes far better with space).
     fluid_ep_nodes = ({e.src for e in graph.edges if e.fluid}
                       | {e.dst for e in graph.edges if e.fluid})
+    if getattr(graph, "no_merge", None):
+        # solver-sized graphs pack far more inserters per machine (arms x ports);
+        # space stacked machines like fluid pairs so the router has corridors --
+        # and so the vgap escalation ladder applies when the base gap can't route
+        fluid_ep_nodes = fluid_ep_nodes | {n for n in graph.nodes
+                                           if graph.nodes[n].kind.value not in
+                                           ("input", "output", "fluid")}
 
     cr: dict[str, int] = {}
     for c in sorted(cols):

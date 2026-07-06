@@ -82,6 +82,20 @@ replicated boundary chests, and expanded consumers are marked `no_merge` so the
 router keeps deliberate arms separate. Interior stays vanilla (BOUNDARY RULE);
 capacities come from the game-measured calibration table, not analytic formulas.
 
+**Where predicted-vs-simulated gaps come from** (attribution, all measured):
+1. *One-arm sizing* — the solver capped machines at one inserter per ingredient and
+   one output arm; real builds run several. Fixed: `Edge(arms=k, port=p)` — k input
+   inserters per lane (k routed legs) and multiple output ports (each its own subnet
+   + root inserter). Gears: 17 -> 5 machines; 15/s circuits: 107 -> 45.
+2. *100%-loaded belts* — taps drain in priority order, so a lane planned at full
+   capacity permanently starves its tail (user-observed on the 17-machine bank).
+   Fixed: LANE_HEADROOM=0.92 planning cap + appetite-based lane sizing (machines pull
+   at their caps, not at the plan) + a ceil-clamp in input-driven mode (at most ONE
+   partial machine, never a starving tail).
+3. *Interior tap arms on multi-column nets* (greensci -34%) and *belt transit warm-up*
+   (long dedicated lanes) — placement geometry; multi-arm sizing shrank both (fewer,
+   shorter lanes), bank-row placement (Stage C) is the structural fix.
+
 **Sim-validated results** (headless, steadiness-tested):
 
 | case | mode | plan | measured | notes |

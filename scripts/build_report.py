@@ -292,10 +292,10 @@ SHOWCASE = [
 
 
 SIZED_BLURBS = {
-    "gears_belt": "INPUT-driven: <b>one belt of iron in — max gears out.</b> The solver "
-        "derives 17 machines (each honestly capped by its single inserter arm, not the "
-        "machine's 1.5/s) and the trunk enters at the end of the bank so every machine "
-        "gets a direct pickup.",
+    "gears_belt": "INPUT-driven: <b>one belt of iron in — max gears out.</b> Five "
+        "machines, each fed by THREE iron arms and drained by TWO output arms — "
+        "multi-inserter feeds sized by the solver, planned to 92% of the belt so no "
+        "machine permanently starves (measured: every machine at 84–100% duty).",
     "circuits_1ps": "OUTPUT-driven, two stages: <b>1 electronic circuit / second.</b> "
         "Circuits eat 3 cables per craft, so both stages go multi-copy and each circuit "
         "machine gets its own dedicated cable lane — multi-arm feeding expressed as "
@@ -310,11 +310,10 @@ SIZED_BLURBS = {
         "arrives by pipe (2.0 segments are uncapacitated), so only the plants and the "
         "item feeds needed sizing.",
     "greenchips_belt": "THE SCALE TEST: <b>a full yellow belt (15/s) of electronic "
-        "circuits</b> — 107 machines, 23,834 entities, from an eight-line spec. It "
-        "compiles, verifies, and runs; but the current placement stretches the "
-        "dedicated lanes to hundreds of tiles, so filling the belts takes hours of "
-        "game time. Structurally sound, geometrically naive — the case that motivates "
-        "bank-row placement (Stage C).",
+        "circuits</b> from an eight-line spec. Multi-arm sizing (3 cable arms per "
+        "circuit machine, 2 output ports per cable machine) cut the first attempt's "
+        "107 machines to <b>45</b> and halved the entity count — machine counts now "
+        "reflect what smart hand-builds achieve with multiple inserters.",
 }
 
 

@@ -83,6 +83,12 @@ class Edge:
     src: str
     dst: str
     fluid: bool = False
+    # rate-solver annotations (default = classic single-inserter lane):
+    # arms  -- how many input inserters feed dst on this lane (k legs, k faces)
+    # port  -- which OUTPUT inserter of src carries this lane; each port becomes its
+    #          own physical net with its own root inserter (k ports = k output arms)
+    arms: int = 1
+    port: int = 0
 
 
 @dataclass
@@ -112,8 +118,9 @@ class Graph:
             raise ValueError(f"duplicate node name: {node.name!r}")
         self.nodes[node.name] = node
 
-    def add_edge(self, src: str, dst: str, fluid: bool = False) -> None:
-        self.edges.append(Edge(src, dst, fluid))
+    def add_edge(self, src: str, dst: str, fluid: bool = False,
+                 arms: int = 1, port: int = 0) -> None:
+        self.edges.append(Edge(src, dst, fluid, arms, port))
 
     def successors(self, name: str) -> list[str]:
         return [e.dst for e in self.edges if e.src == name]

@@ -41,7 +41,13 @@ from . import fbsr_validation as fv
 ARM_BELT_PICK = 0.9375   # inserter, compressed belt -> machine/chest   (60/64 ticks)
 ARM_CHEST_PICK = 0.857   # inserter, chest/machine -> anything          (60/70 ticks)
 BELT_FULL = 15.0         # loader-fed belt, both lanes
+K_IN = 3                 # max input arms per ingredient per machine
+K_OUT = 2                # max output arms per machine (each = a port-subnet)
 SAFETY = 0.95            # sizing headroom: run machines at <=95% of the binding cap
+LANE_HEADROOM = 0.92     # never PLAN a belt above 92% of capacity: taps drain a belt
+#                          in priority order, and at 100% load the tail machines
+#                          starve on every compression hiccup -- measured on the
+#                          17-machine gears bank (tail ran ~11% below its siblings)
 
 _MACHINE_KINDS = (NodeKind.ASSEMBLER, NodeKind.CHEMICAL, NodeKind.FURNACE)
 
@@ -124,8 +130,9 @@ def solve(graph: Graph, dumper="auto") -> tuple[Graph, dict]:
         lam = None
         for i, cap in in_caps.items():
             draw = sum(unit_raw[o].get(i, 0.0) for o in outputs)
-            if draw > 0:
-                lam = min(lam, cap / draw) if lam is not None else cap / draw
+            if draw > 0:                           # plan to 92% of declared supply:
+                usable = cap * LANE_HEADROOM       # a 100%-loaded belt starves its
+                lam = min(lam, usable / draw) if lam is not None else usable / draw
         if lam is None:
             raise SolveError("input rates given but no output draws from them")
         target = {o: lam for o in outputs}
@@ -145,25 +152,82 @@ def solve(graph: Graph, dumper="auto") -> tuple[Graph, dict]:
     for o in outputs:
         for n, c in unit[o].items():
             required[n] = required.get(n, 0.0) + c * target[o]
-    eff, copies, per_copy = {}, {}, {}
+    eff, copies, per_copy, arms_in, ports_out = {}, {}, {}, {}, {}
     for n, r in required.items():
-        arm_in = min((ARM_BELT_PICK / amt for amt in item_needs[n].values()),
-                     default=caps[n])
-        arm_out = ARM_CHEST_PICK / out_amount[n]
-        eff[n] = min(caps[n], arm_in, arm_out) * SAFETY
+        # Neither INPUT nor OUTPUT arms cap a machine at one inserter: a machine may
+        # run up to K_IN arms per ingredient (k routed legs) and K_OUT output arms
+        # (k port-subnets, each with its own root inserter). Faces are finite --
+        # K_IN=3 and K_OUT=2 keep a 3x3 machine's perimeter feasible even for
+        # three-ingredient recipes.
+        arm_cap = min((K_IN * ARM_BELT_PICK / amt for amt in item_needs[n].values()),
+                      default=caps[n])
+        arm_out = K_OUT * ARM_CHEST_PICK / out_amount[n]
+        eff[n] = min(caps[n], arm_cap, arm_out) * SAFETY
         copies[n] = max(1, math.ceil(r / eff[n]))
         per_copy[n] = r / copies[n]
+    def _arms(n):
+        arms_in[n] = {ing: min(K_IN, math.ceil(per_copy[n] * amt / ARM_BELT_PICK))
+                      for ing, amt in item_needs[n].items()}
+        ports_out[n] = min(K_OUT, max(1, math.ceil(
+            per_copy[n] * out_amount[n] / ARM_CHEST_PICK)))
+    for n in required:
+        _arms(n)
 
-    raw_draw = {}                                  # input node -> items/s
+    # APPETITE-based input sizing: machines pull at their true caps, not at the plan
+    # (they cannot be throttled), so lanes must cover what the built machines CAN
+    # draw -- sizing lanes to the target draw loads belts to 100% and the tail taps
+    # starve on every compression hiccup (measured on the 17-machine gears bank).
+    def raw_appetite():
+        """items/s each raw input's DIRECT consumers can pull at their true caps
+        (appetite = target draw scaled by the consumers' appetite/target ratio)."""
+        out = {}
+        for i in {i for o in outputs for i in unit_raw[o]}:
+            direct = [e.dst for e in graph.edges if e.src == i and e.dst in copies]
+            ratio = max(((eff[n] / SAFETY) / max(per_copy[n], 1e-12)
+                         for n in direct), default=1.0)
+            base = sum(unit_raw[o].get(i, 0.0) * target[o] for o in outputs)
+            out[i] = base * ratio
+        return out
+
+    # input-driven clamp: built machines pull at appetite; if a stage adjacent to a
+    # DECLARED input can overdraw the usable supply, shed copies until it fits (a
+    # 100%-loaded declared belt is the constant-starvation case the user observed)
+    for i, cap in in_caps.items():
+        usable = cap * LANE_HEADROOM
+        direct = sorted({e.dst for e in graph.edges if e.src == i and e.dst in copies})
+        for n in direct:
+            amt = needs[n].get(product[i], 0)
+            if amt <= 0:
+                continue
+            per_copy_appetite = (eff[n] / SAFETY) * amt
+            others = sum((eff[m] / SAFETY) * needs[m].get(product[i], 0) * copies[m]
+                         for m in direct if m != n)
+            avail = usable - others
+            fit = (max(1, math.ceil(avail / per_copy_appetite))
+                   if per_copy_appetite else copies[n])
+            if fit < copies[n]:                    # ceil: at most ONE partial machine
+                copies[n] = fit                    # instead of a permanently starving
+                per_copy[n] = min(required[n] / copies[n], eff[n])  # tail
+                _arms(n)
+
+    raw_draw = {}                                  # input node -> items/s (at target)
     for o in outputs:
         for i, d in unit_raw[o].items():
             raw_draw[i] = raw_draw.get(i, 0.0) + d * target[o]
+    appetite = raw_appetite()
     lanes = {}
     for i, d in raw_draw.items():
         if graph.nodes[i].kind is NodeKind.FLUID:
             lanes[i] = 1                           # fluids: one source, uncapacitated
         else:
-            lanes[i] = max(1, math.ceil(d / BELT_FULL))
+            a = max(d, appetite.get(i, d))
+            declared = graph.nodes[i].rate
+            usable = (declared if declared is not None
+                      else lanes.get(i, 0) or a) or a
+            n_lanes = max(1, math.ceil(a / (BELT_FULL * LANE_HEADROOM)))
+            if declared is not None:
+                n_lanes = min(n_lanes, max(1, math.ceil(declared / BELT_FULL)))
+            lanes[i] = n_lanes
 
     out_total = {o: target[o] for o in outputs}
     out_chests = {o: max(1, math.ceil(t / BELT_FULL)) for o, t in out_total.items()}
@@ -199,7 +263,7 @@ def solve(graph: Graph, dumper="auto") -> tuple[Graph, dict]:
         if orig in per_copy:
             return eff[orig] * out_amount[orig]
         if graph.nodes[orig].kind is NodeKind.INPUT:
-            return BELT_FULL
+            return BELT_FULL * LANE_HEADROOM
         return float("inf")                        # fluid source
 
     # supply-aware assignment: consumers round-robin over supplier copies, but a
@@ -212,35 +276,49 @@ def solve(graph: Graph, dumper="auto") -> tuple[Graph, dict]:
                     g2.add_edge(s, d, fluid=True)
             continue
         if graph.nodes[e.dst].kind is NodeKind.OUTPUT:
-            # deliveries: producers round-robin over the output chest copies
+            # deliveries: producers round-robin over the output chest copies, using
+            # every output port so each root inserter carries <= one arm's rate
             for k, s in enumerate(srcs):
-                g2.add_edge(s, dsts[k % len(dsts)])
+                for port in range(ports_out.get(e.src, 1)):
+                    g2.add_edge(s, dsts[k % len(dsts)], port=port)
             continue
         # machine feeds: pack each consumer copy's per-ingredient draw into supplier
-        # lane capacity. A draw exceeding one lane's supply is SPLIT across lanes --
-        # each extra lane is an extra inserter arm on the consumer (distinct producer
-        # copies, since the router dedupes same-pair edges).
+        # capacity in ARM-sized chunks. Chunks from the same supplier copy become one
+        # edge with arms=k (k routed legs, k inserters); chunks that spill to another
+        # supplier become a separate edge. Producer copies distribute their consumers
+        # across their output PORTS (each port = its own subnet + root inserter),
+        # never promising more than one arm's rate per port.
         ing = product[e.src]
         share = 1.0 / max(len(suppliers(e.dst, ing)), 1)
         budget = {s: copy_rate(e.src) for s in srcs}
+        is_input = graph.nodes[e.src].kind is NodeKind.INPUT
+        n_ports = 1 if is_input else ports_out.get(e.src, 1)
+        pload = {s: [0.0] * n_ports for s in srcs}
         si = 0
         for d in dsts:
             need = per_copy.get(e.dst, 0.0) * needs.get(e.dst, {}).get(ing, 0.0) * share
+            got = {}                               # src copy -> arms taken
             guard = 0
             while need > 1e-9:
                 s = srcs[si]
-                take = min(budget[s], need)
+                take = min(budget[s], need, ARM_BELT_PICK)
                 if take > 1e-9:
-                    g2.add_edge(s, d)
+                    got[s] = got.get(s, 0) + 1
                     budget[s] -= take
                     need -= take
                 if need > 1e-9 or budget[s] <= 1e-9:
                     si = (si + 1) % len(srcs)
                     guard += 1
-                    if guard > 2 * len(srcs) + 2:
+                    if guard > 3 * len(srcs) + 3:
                         raise SolveError(
                             f"cannot pack {e.dst} demand onto {e.src} lanes "
                             f"({need:.3f}/s unplaced -- supply too tight)")
+            for s, k in got.items():
+                port = min(range(n_ports), key=lambda p: pload[s][p])
+                flow = per_copy.get(e.dst, 0.0) * needs.get(e.dst, {}).get(ing, 0.0) \
+                    * share * (k / max(sum(got.values()), 1))
+                pload[s][port] += flow
+                g2.add_edge(s, d, arms=k, port=port)
         # interior consumers must keep supplier lanes separate (arms!)
         if graph.nodes[e.dst].kind in _MACHINE_KINDS:
             for d in dsts:
@@ -272,8 +350,12 @@ def solve(graph: Graph, dumper="auto") -> tuple[Graph, dict]:
         "machines": {n: {"copies": copies[n],
                          "per_copy_crafts_per_s": round(per_copy[n], 4),
                          "cap_per_copy": round(eff[n], 4),
+                         "arms_in_per_copy": arms_in[n],
+                         "output_arms_per_copy": ports_out[n],
                          "binding": ("machine" if eff[n] >= caps[n] * SAFETY - 1e-9
-                                     else "inserter arms")}
+                                     else "output arm" if eff[n] < caps[n] * SAFETY - 1e-9
+                                     and abs(eff[n] - (ARM_CHEST_PICK / out_amount[n]) * SAFETY) < 1e-6
+                                     else "input arms")}
                      for n in sorted(copies)},
         "input_lanes": {i: lanes[i] for i in sorted(lanes)},
         "input_draw_per_s": {i: round(d, 3) for i, d in sorted(raw_draw.items())},

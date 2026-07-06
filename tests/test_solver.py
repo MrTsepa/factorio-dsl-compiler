@@ -28,10 +28,12 @@ GEARS_1BELT = "\n".join([
 
 def test_input_driven_gears_plan():
     g2, plan = _solve(GEARS_1BELT)
-    # 15 iron/s -> 7.5 gears/s target; arm-limited copies (0.9375/2 * 0.95)
-    assert plan["target_per_s"]["out"] == pytest.approx(7.5)
-    assert plan["machines"]["gears"]["copies"] == 17
-    assert plan["machines"]["gears"]["binding"] == "inserter arms"
+    # 92% of the declared belt (a 100%-loaded belt permanently starves the tail
+    # taps), multi-arm machines: 3 iron arms in + 2 output arms each
+    assert plan["target_per_s"]["out"] == pytest.approx(6.9)
+    assert plan["machines"]["gears"]["copies"] == 5
+    assert plan["machines"]["gears"]["arms_in_per_copy"] == {"iron-plate": 3}
+    assert plan["machines"]["gears"]["output_arms_per_copy"] == 2
     assert plan["input_lanes"]["iron"] == 1
     # every expanded machine keeps its supplier lanes unmerged (arms!)
     assert any(n.startswith("gears_") for n in g2.no_merge)
@@ -51,7 +53,7 @@ def test_output_driven_red_science_plan_and_verifies():
         "red -> out",
     ]))
     assert plan["machines"]["red"]["copies"] == 4          # 0.45 / (0.15*0.95)
-    assert plan["machines"]["gear"]["copies"] == 2
+    assert plan["machines"]["gear"]["copies"] == 1         # multi-arm: one suffices
     # ceil() overdelivers: machines run at cap, not at the plan -- the expected
     # actual (min stage capacity) is what the game measures (0.6 == 4 x 0.15)
     assert plan["expected_actual_per_s"]["out"] == pytest.approx(0.6)
@@ -66,5 +68,11 @@ def test_sized_graph_compiles_and_verifies():
     assert rep.ok, rep.format()
     # the input net must have NO internal tap arms (a tap throttles a subtree)
     taps = [e for e in layout.entities
-            if e.meta.get("net") == "b:iron" and e.meta.get("role") == "tap"]
+            if (e.meta.get("net") or "").startswith("b:iron")
+            and e.meta.get("role") == "tap"]
     assert not taps, "sized input net must reach every machine by direct trunk pickup"
+    # multi-arm feeds are real: 5 machines x 3 iron arms = 15 input inserters
+    iron_ins = [e for e in layout.entities
+                if (e.meta.get("net") or "").startswith("b:iron")
+                and e.meta.get("role") == "in"]
+    assert len(iron_ins) == 15
