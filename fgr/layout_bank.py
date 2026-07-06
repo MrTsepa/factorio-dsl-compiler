@@ -102,16 +102,15 @@ def plan_dag(graph: Graph, dumper):
         product[n] = prod
         typed = _ingredients(graph.nodes[n], dumper, types=True)
         needs[n] = {i: a for i, (a, t) in typed.items() if t == "item"}
-        fl = [i for i, (a, t) in typed.items() if t == "fluid"]
-        if len(fl) > 1:
-            raise BankInapplicable(f"stage {n} needs {len(fl)} fluids (template "
-                                   f"pipes fit 1)")
-        fluid_ing[n] = fl[0] if fl else None
-        if fl:
-            srcs = [s for s, nd in graph.nodes.items()
-                    if nd.kind is NodeKind.FLUID and nd.item == fl[0]]
-            if not srcs:
-                raise BankInapplicable(f"fluid {fl[0]!r} has no boundary source")
+        fl = sorted(i for i, (a, t) in typed.items() if t == "fluid")
+        if len(fl) > 2:
+            raise BankInapplicable(f"stage {n} needs {len(fl)} fluids (a chem "
+                                   f"plant has two input boxes)")
+        fluid_ing[n] = fl
+        for f in fl:
+            if not any(nd.kind is NodeKind.FLUID and nd.item == f
+                       for nd in graph.nodes.values()):
+                raise BankInapplicable(f"fluid {f!r} has no boundary source")
 
     order, seen = [], set()
 
@@ -194,13 +193,14 @@ def plan_dag(graph: Graph, dumper):
 _ARM_RATE = {"farN": LONG_ARM_PICK, "nearN": ARM_BELT_PICK, "nearS": ARM_BELT_PICK}
 
 
-def _stage_slots(cap, needs, assign, out_amount, has_s_input, s_face_slots=3):
+def _stage_slots(cap, needs, assign, out_amount, has_s_input, s_face_slots=3,
+                 n_face_slots=3):
     """Best per-machine arm allocation for the row assignment. N face: 3 slots
     (farN long + nearN normal). S face: 3 slots shared by nearS input arms and the
     output arms (LONG when a nearS row exists -- they reach over it)."""
     best = None
-    for k_far in range(0, 4):
-        for k_near in range(0, 4 - k_far):
+    for k_far in range(0, n_face_slots + 1):
+        for k_near in range(0, n_face_slots + 1 - k_far):
             for k_sin in range(0, s_face_slots):
                 for k_out in range(1, s_face_slots + 1 - k_sin):
                     x = cap * SAFETY
@@ -253,9 +253,31 @@ def compile_bank(graph: Graph, dumper="auto"):
     # fluid-stage machines are ROTATED 180 degrees: their fluid boxes face SOUTH,
     # the pipe trunk runs BELOW the stage, and the north side keeps full bus
     # adjacency. The box costs one S-face slot.
+    # rotation per fluid stage: boxes SOUTH (trunk below) when the stage is last
+    # or takes an adjacent bus from above; boxes NORTH (trunk above) when it has an
+    # adjacent consumer below. Both at once cannot host the trunk rows.
+    consumers0: dict = {n: [] for n in stages}
+    for n in stages:
+        for ing, (kind, s) in sources[n].items():
+            if kind == "stage":
+                consumers0[s].append(n)
+    rotated = {}
+    for i, n in enumerate(stages):
+        if not fluid_ing[n]:
+            rotated[n] = False
+            continue
+        prev = stages[i - 1] if i else None
+        nxt = stages[i + 1] if i + 1 < len(stages) else None
+        bus_in = row_assign[n].get("farN") and             row_assign[n]["farN"][1] == ("stage", prev)
+        bus_out = nxt in consumers0[n]
+        if bus_in and bus_out:
+            raise BankInapplicable(f"fluid stage {n} is bus-fed AND bus-feeding "
+                                   f"(no side left for pipe trunks)")
+        rotated[n] = bool(bus_in) or not bus_out
     slots = {n: _stage_slots(caps[n], needs[n], row_assign[n], out_amt[n],
                              has_s_input="nearS" in row_assign[n],
-                             s_face_slots=(2 if fluid_ing[n] else 3))
+                             s_face_slots=3 - (len(fluid_ing[n]) if rotated[n] else 0),
+                             n_face_slots=3 - (0 if rotated[n] else len(fluid_ing[n])))
              for n in stages}
 
     # ---- DAG unit demand --------------------------------------------------------------
@@ -377,6 +399,11 @@ def compile_bank(graph: Graph, dumper="auto"):
             a = row_assign[n]
             r: dict = {}
             prev = stages[i - 1] if i else None
+            if fluid_ing[n] and not rotated[n]:
+                for fi_, f in enumerate(fluid_ing[n]):
+                    r[("trunk", fi_)] = y
+                    r[("pair", fi_)] = y + 1
+                    y += 2
             adj_far = (a.get("farN") and a["farN"][1] == ("stage", prev))
             if a.get("farN") and not adj_far:
                 r["farN"] = y
@@ -417,10 +444,11 @@ def compile_bank(graph: Graph, dumper="auto"):
                 if any(c == nxt for c, _amt in consumers[n]):
                     r["bus"] = y
                     y += 1
-            if fluid_ing[n]:
-                r["pair"] = y
-                r["trunk"] = y + 1
-                y += 2
+            if rotated[n]:
+                for fi_, f in enumerate(fluid_ing[n]):
+                    r[("pair", fi_)] = y
+                    r[("trunk", fi_)] = y + 1
+                    y += 2
             ypos[(n, b)] = r
         y += 3
 
@@ -535,22 +563,29 @@ def compile_bank(graph: Graph, dumper="auto"):
                                  recipe=graph.nodes[n].recipe))
                 lay.add(PlacedEntity(_MACHINE_KINDS[graph.nodes[n].kind], x,
                                      r["mach"], recipe=graph.nodes[n].recipe,
-                                     direction=(S if fluid_ing[n] else None),
+                                     direction=(S if (fluid_ing[n] and rotated[n])
+                                                else None),
                                      meta={"node": mname}))
                 proto_m = _MACHINE_KINDS[graph.nodes[n].kind]
-                box_x = None
+                box_xs = []
+                nbox_xs = []
                 if fluid_ing[n]:
-                    conns = _fluid_connections(proto_m, x, r["mach"], S,
+                    mdir = S if rotated[n] else 0
+                    shaft_row = r["arm_out"] if rotated[n] else r["arm_in"]
+                    conns = _fluid_connections(proto_m, x, r["mach"], mdir,
                                                with_dir=True)
-                    ins = [(t, md) for t, fl, md in conns if fl == "input"]
-                    box = next(t for t, md in ins if t[1] == r["arm_out"])
-                    box_x = box[0]
-                    md = next(md for t, md in ins if t == box)
-                    lay.add(PlacedEntity(PIPE_TO_GROUND, box_x, r["arm_out"],
-                                         direction=md, meta={}))
-                    lay.add(PlacedEntity(PIPE_TO_GROUND, box_x, r["pair"],
-                                         direction=S, meta={}))
-                face = [x, x + 1, x + 2]
+                    ins = [(t, md) for t, fl_, md in conns if fl_ == "input"
+                           and t[1] == shaft_row]
+                    for fi_, f in enumerate(fluid_ing[n]):
+                        t, md = ins[fi_]
+                        (box_xs if rotated[n] else nbox_xs).append(t[0])
+                        lay.add(PlacedEntity(PIPE_TO_GROUND, t[0], shaft_row,
+                                             direction=md, meta={}))
+                        lay.add(PlacedEntity(PIPE_TO_GROUND, t[0],
+                                             r[("pair", fi_)],
+                                             direction=(S if rotated[n] else N),
+                                             meta={}))
+                face = [fx for fx in (x, x + 1, x + 2) if fx not in nbox_xs]
                 fi = 0
                 for _ in range(sl["k_far"]):
                     lay.add(PlacedEntity(LONG_INSERTER, face[fi], r["arm_in"],
@@ -561,7 +596,7 @@ def compile_bank(graph: Graph, dumper="auto"):
                                          direction=N, meta={"role": "in"}))
                     fi += 1
                 face = [x, x + 1, x + 2]
-                sface = [fx for fx in (x, x + 1, x + 2) if fx != box_x]
+                sface = [fx for fx in (x, x + 1, x + 2) if fx not in box_xs]
                 si = 0
                 for _ in range(sl["k_sin"]):
                     lay.add(PlacedEntity(INSERTER, sface[si], r["arm_out"],
@@ -590,13 +625,15 @@ def compile_bank(graph: Graph, dumper="auto"):
             if a.get("farN") and a["farN"][1][0] == "stage" \
                     and not (i and a["farN"][1][1] == stages[i - 1]):
                 pass                               # long-haul dst: emitted below
-            if fluid_ing[n] and nb:
-                fname = f"fl_{fluid_ing[n]}_{b}_{i}"
-                g2.add_node(Node(fname, NodeKind.FLUID, item=fluid_ing[n]))
-                lay.add(PlacedEntity(FLUID_SOURCE, X_IN, r["trunk"],
-                                     item=fluid_ing[n], meta={"node": fname}))
+            for fi_, f in enumerate(fluid_ing[n]):
+                if not nb:
+                    continue
+                fname = f"fl_{f}_{b}_{i}"
+                g2.add_node(Node(fname, NodeKind.FLUID, item=f))
+                lay.add(PlacedEntity(FLUID_SOURCE, X_IN, r[("trunk", fi_)],
+                                     item=f, meta={"node": fname}))
                 for x in range(X_IN + 1, W):
-                    lay.add(PlacedEntity(PIPE, x, r["trunk"], meta={}))
+                    lay.add(PlacedEntity(PIPE, x, r[("trunk", fi_)], meta={}))
                 for c in _block_slice(copies[n], per_block[n], b):
                     g2.add_edge(fname, c, fluid=True)
             for p in power_slots + [width_slots]:
