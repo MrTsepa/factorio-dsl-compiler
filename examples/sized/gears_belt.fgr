@@ -1,5 +1,6 @@
 # INPUT-DRIVEN: one belt of iron in -> as many gears as that supply allows.
-# The solver derives 17 arm-limited machines and targets 7.5 gears/s.
+# The solver sizes 5 machines (3 iron arms in + 2 output arms each), planned to
+# 92% of the belt so no machine permanently starves; game-measured 6.75 gears/s.
 input iron : iron-plate @ 1 belt
 assembler gears : iron-gear-wheel
 output out

@@ -10,8 +10,16 @@ layout *really* does what you asked — every belt and pipe actually connects, n
 crossed or missing. So the part that draws the layout can be anything (a heuristic, a
 search, a model); the verifier is the impartial judge of whether it got it right.
 
+And it goes past connectivity: annotate a spec with a **throughput target**
+(`output chips @ 15/s` or `input iron : iron-plate @ 1 belt`) and the **rate solver**
+sizes the whole factory — machine counts, multi-inserter feeds, the number of input
+belts — then the blueprint is **measured in the real game** (headless Factorio) to close
+the loop. Every blueprint is paste-and-run: powered, fed by full belts at the boundary,
+verified before you ever see it.
+
 📊 **[Browse the full visual report →](https://mrtsepa.github.io/factorio-dsl-compiler/report.html)**
-— every example rendered, with its DSL, the verifier's checks, and a *copy blueprint* button.
+— every example rendered, with its DSL, sizing plan, the verifier's checks, and a
+*copy blueprint* button.
 
 ## Gallery
 
@@ -325,7 +333,16 @@ are all figured out for you.
 uv venv --python 3.10 .venv && uv pip install pytest        # one-time
 .venv/bin/python -m fgr compile examples/basic/gears.fgr    # compile + verify, print the blueprint
 .venv/bin/python -m fgr verify  examples/complex/sulfuric_acid.fgr
+.venv/bin/python -m fgr solve   examples/sized/gears_belt.fgr   # size to a rate target
+.venv/bin/python -m fgr rates   examples/basic/circuits.fgr     # throughput metadata
 .venv/bin/python -m pytest -q                               # the test suite
+```
+
+To *measure* a blueprint in the actual game (optional, used by the rate studies):
+
+```bash
+scripts/get_factorio.sh                    # pinned free headless build -> out/_factorio_sim
+.venv/bin/python scripts/rate_study.py     # micro-benchmarks + corpus runs (Docker on macOS)
 ```
 
 Rendering a PNG is **optional** — the gallery images and report here are pre-rendered, and
@@ -362,13 +379,13 @@ three live side by side behind one interface (`fgr.generators`):
 
 | generator | approach | pass rate\* | avg compile\*\* | notes |
 |---|---|---|---|---|
-| **v3** (default) | v2's placement + a **global negotiated-congestion router** (PathFinder-style) | **155 / 155** | 112 ms | passes the whole battery; leanest layouts (fewest entities/turns) |
-| v2 | deterministic **lane fabric**: 4 fixed passes, no search, no rip-up | 113 / 155 | **24 ms** | fastest; fails lane-purity + power checks its era predates |
-| v1 | fixed grid + **A\* rip-up** search router | 118 / 155 | 435 ms | can hang on large/congested graphs (11/155 timeouts) |
+| **v3** (default) | v2's placement + a **global negotiated-congestion router** (PathFinder-style) | **161 / 161** | 114 ms | passes the whole battery; leanest layouts (fewest entities/turns) |
+| v2 | deterministic **lane fabric**: 4 fixed passes, no search, no rip-up | 121 / 161 | **24 ms** | fastest; fails lane-purity + power checks its era predates |
+| v1 | fixed grid + **A\* rip-up** search router | 124 / 161 | 423 ms | can hang on large/congested graphs (11/161 timeouts) |
 
-<sub>\*across `examples/` (49 curated) + `corner_cases/` (106 generated stress cases),
-each `(case, generator)` pair subprocess-isolated with a 10s cap. Compile times are each
-generator's own passing set.</sub>
+<sub>\*across `examples/` (55 curated, incl. the sized specs compiled plain) +
+`corner_cases/` (106 generated stress cases), each `(case, generator)` pair
+subprocess-isolated with a 10s cap. Compile times are each generator's own passing set.</sub>
 
 ```bash
 .venv/bin/python -m fgr compile examples/basic/gears.fgr -g v2   # pick a generator explicitly
@@ -389,51 +406,100 @@ layouts of the three (fewest entities, 10× fewer belt turns than v2). See
 Because the oracle is only as good as its model of the game, that model is checked against
 ground truth — `fgr validate-model` asserts the inserter/fluid-box/underground geometry
 matches Factorio's real prototype data (via FBSR), and a separate check confirms each
-recipe is actually craftable by its machine. Both auto-skip if FBSR isn't installed.
+recipe is actually craftable by its machine *and fed its real ingredients on the right
+lanes* (the game-accuracy audit — curated examples must use real recipes). Both auto-skip
+if FBSR isn't installed.
+
+## Rates: from "it connects" to "it delivers N per second"
+
+Connectivity is necessary, not sufficient — so throughput is handled as a stack of three
+layers, each validating the one above ([docs/RATES.md](docs/RATES.md) has the design,
+[docs/rate_analysis.html](https://mrtsepa.github.io/factorio-dsl-compiler/rate_analysis.html)
+the measurement deep-dive with plots):
+
+- **Metadata (`fgr rates`)** — every compiled blueprint's in-game description carries its
+  expected throughput and bottleneck, computed from Factorio's prototype dumps plus a
+  **calibration table measured in the game** (the game quantizes inserter swings to whole
+  ticks — 60/70 ticks ≈ 0.857/s from a chest, 60/64 ≈ 0.938/s off a belt — analytic
+  formulas chronically mispredict).
+- **The rate solver (`fgr solve`)** — annotate an input (`@ 1 belt`, max-output mode) or
+  an output (`@ 15/s`, sizing mode) and the solver expands the spec into a sized graph:
+  machine copies, **multi-inserter feeds** (up to 3 arms per ingredient, 2 output arms —
+  expressed structurally, so the router just routes them), input lanes derived as
+  `ceil(draw / capacity)`, and belts planned to ≤92% of capacity because taps drain in
+  priority order — a 100%-loaded belt permanently starves its tail machines. Plans report
+  a guaranteed floor *and* the expected actual rate (machines run at their caps, not at
+  plans).
+- **Game-in-the-loop (`scripts/simulate.py`)** — a pinned **headless Factorio** (installed
+  by `scripts/get_factorio.sh`, run in Docker on macOS, native on Linux) boots the
+  blueprint in a scenario and measures per-output and per-machine production. Machine-bound
+  builds land within 2–4% of prediction: a one-belt gear factory sizes to **5 machines
+  (3 iron arms + 2 output arms each), measured 6.75 gears/s at 84–100% duty on every
+  machine**; a full-belt (15/s) electronic-circuit factory sizes to 45 machines and
+  verifies at 12.8k entities — from an 8-line spec.
+
+Everything inside a blueprint is **vanilla-buildable**; the boundary scaffolding (infinity
+chests, loaders, the power interface) is exactly what you replace when splicing the build
+into a real base.
 
 <details><summary>How the code is organized</summary>
 
 ```
-fgr/                 the package (dsl → ir → layout(s) → verify → blueprint/encode → render)
+fgr/                 the package (dsl → ir → solver → layout(s) → verify → blueprint → render)
 examples/
   basic/             intro factories (gears, circuits, bus, fanout, merge, science)
   complex/           hand-authored realistic builds (furnaces, oil/chem fluids, deep chains)
+  sized/             rate-solver specs with @rate targets (sim-validated)
   stress/            machine-generated complex DAGs — the stress battery
 corner_cases/        standalone failure-hunting corpus (106 cases; not in the gating suite)
-scripts/             compare_generators (3-way head-to-head) · stress_complex (battery)
-                     · independent_check (2nd-opinion checker) · audit_specs · build_report
-                     · gen_gallery · refresh_corner_case_status
+scripts/             compare_generators (3-way head-to-head) · simulate (headless Factorio)
+                     · rate_study + build_rate_analysis (measurement deep-dive)
+                     · get_factorio.sh · build_report · build_pdf · gen_gallery
+                     · stress_complex · independent_check · audit_specs
 tests/               the pytest suite
-docs/                the committed report + gallery images (also served on GitHub Pages)
+docs/                the committed report, RATES/INSPIRATION design docs, rate analysis,
+                     gallery images (served on GitHub Pages)
 ```
 
 | file | role |
 |------|------|
-| `fgr/dsl.py` | parse `.fgr` text → a `Graph` (the spec) |
+| `fgr/dsl.py` | parse `.fgr` text (incl. `@ rate` annotations) → a `Graph` (the spec) |
+| `fgr/solver.py` | the rate solver: sized graph (machine copies, arms, ports, lanes) + plan |
+| `fgr/rates.py` | throughput metadata from prototype dumps + game-measured calibration |
 | `fgr/generators.py` | the registry: `compile_graph(graph, "v1"\|"v2"\|"v3")` — pick a generator by name |
 | `fgr/layout_v3.py` | **v3**, the default generator: global negotiated-congestion router |
 | `fgr/layout.py` | **v2**: deterministic lane-fabric router (also v3's placement passes) |
 | `fgr/layout_v1.py` | **v1**, the original fixed-grid + A\* rip-up router (historical baseline) |
-| `fgr/verify.py` | **the** generator-agnostic oracle |
-| `fgr/blueprint.py` + `fgr/encode.py` | `Layout` → Factorio 2.0 blueprint string |
-| `fgr/fbsr_validation.py` | check the model (geometry + recipes) against real Factorio data |
+| `fgr/power.py` | substation grid + electric interface, planned before routing |
+| `fgr/verify.py` | **the** generator-agnostic oracle (incl. lane purity + power checks) |
+| `fgr/blueprint.py` + `fgr/encode.py` | `Layout` → Factorio 2.0 blueprint string (wires, loaders, rates tooltip) |
+| `fgr/fbsr_validation.py` | check the model (geometry, recipes, real ingredients) against Factorio data |
+| `scripts/simulate.py` | boot a blueprint in headless Factorio, sample per-chest/per-machine production |
 
 </details>
 
 ## What this POC shows (and where it strains)
 
-It works end-to-end: a high-level graph becomes a real, verified, buildable layout — items
-on belts and fluids on pipes, with undergrounds, inline-tap fan-out/merge (no splitters),
-furnaces, and chemical plants. It also demonstrates the premise itself: **three** generators
-(v1's search router, v2's deterministic lane fabric, v3's global negotiated router) sit
-behind the same interface and are graded by the same independent oracle — swap the
-generator, keep the guarantee. Each generation was graded against its predecessor by that
-oracle before becoming the default. `STATUS.md` has the full comparative analysis.
+It works end-to-end: a high-level graph — optionally with a throughput target — becomes a
+real, verified, **powered, paste-and-run** layout, sized to its rate, with its expected
+throughput in the blueprint tooltip and, for the studied cases, measured in the actual
+game. It also demonstrates the premise itself: **three** generators (v1's search router,
+v2's deterministic lane fabric, v3's global negotiated router) sit behind the same
+interface and are graded by the same independent oracle — swap the generator, keep the
+guarantee. Each generation was graded against its predecessor by that oracle before
+becoming the default. `STATUS.md` has the full comparative analysis.
 
-The honest edges: the tracked 155-case battery passes in full on v3, so what remains is
-structural — the verifier checks *connectivity*, not throughput (that an item *can* reach B,
-not the rate), power isn't placed yet, and v3's negotiation is bounded (a graph whose
-contention never converges would emit its best attempt for the verifier to grade; growing
-`corner_cases/` until one exists is the standing failure hunt). The architecture keeps the
-generators and the verifier cleanly separated so each can grow on its own — the generator is
-swappable; the verifier is the oracle.
+The honest edges, all measured rather than suspected:
+- The verifier certifies *connectivity*; the rate solver's plans are validated by
+  simulation, but a static **capacity check inside the verifier** (PASS ⇒ every link
+  sustains the plan) is still on the list.
+- Sized builds at scale converge slowly in-game: dedicated lanes stretch long, and
+  filling belts dominates warm-up (the 45-machine full-belt circuit factory ramps for
+  tens of game-minutes). The structural fix — **bank-row placement / direct insertion**
+  (machines sharing short trunk belts) — is the next milestone, along with splitters.
+- v3's negotiation is bounded: a graph whose contention never converges emits its best
+  attempt for the verifier to grade; growing `corner_cases/` until one exists is the
+  standing failure hunt.
+
+The architecture keeps the generators and the verifier cleanly separated so each can grow
+on its own — the generator is swappable; the verifier is the oracle.

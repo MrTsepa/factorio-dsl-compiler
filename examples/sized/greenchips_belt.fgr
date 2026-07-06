@@ -1,6 +1,6 @@
 # THE BIG ONE: a full yellow belt (15/s) of electronic circuits.
-# ~107 machines: every circuit machine is 3-cable-arm-bound, every cable machine
-# output-arm-bound; copper needs two input belts; the output belt runs at 100%.
+# 45 machines via multi-inserter feeds: 3 cable arms per circuit machine, 2 output
+# ports per cable machine; two copper belts + two iron belts in (appetite-sized).
 input copper : copper-plate
 input iron : iron-plate
 assembler cable : copper-cable

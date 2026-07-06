@@ -35,16 +35,17 @@ foreign tunnel is a real feed, not a no-op. `tests/test_examples.py::KNOWN_FAILI
 
 ## v1 vs v2 vs v3: comparative analysis
 
-All three generators over the same **155 cases** (`examples/` + `corner_cases/`) through
+All three generators over the same **161 cases** (`examples/` incl. the rate-solver
+specs compiled plain + `corner_cases/`) through
 `scripts/compare_generators.py`, each `(file, generator)` pair isolated in its own subprocess
 with a 10s timeout (v1's search router can hang; a hang on one case must never take down the
 comparison). Live numbers: run the script yourself.
 
-| generator | pass rate | timeouts | avg compile\* | total entities\* | belt turns\* | tunnel crossings\* |
-|---|---|---|---|---|---|---|
-| v1 (A\* rip-up) | 118 / 155 | 11 | 435 ms | 67,775 | 4,113 | 2,523 |
-| v2 (lane fabric) | 113 / 155 | 0 | **24 ms** | 96,088 | 995 | 4,578 |
-| **v3 (global router)** | **155 / 155** | **0** | 112 ms | **61,974** | **259** | **2,554** |
+| generator | pass rate | timeouts | avg compile\* | belt turns\* | tunnel crossings\* |
+|---|---|---|---|---|---|
+| v1 (A\* rip-up) | 124 / 161 | 11 | 423 ms | 4,124 | 2,535 |
+| v2 (lane fabric) | 121 / 161 | 0 | **24 ms** | 1,111 | 4,858 |
+| **v3 (global router)** | **161 / 161** | **0** | 114 ms | **244** | **2,521** |
 
 <sub>\*each on that generator's own passing set. Lean power grids (set-cover planning,
 dilation-3 targets) removed enough router obstacles that even the largest giants now
@@ -62,9 +63,9 @@ finish well inside the 10s per-case cap.</sub>
   stay dark (v3 plans power BEFORE routing — substations claim ground while it's open
   and the router dives under them). v3 routes the same cases with same-product lanes,
   lane-separated pairs, tunnel-aware weld checks, and a planned grid instead.
-- **Shape.** v3 is the *leanest* of the three: ~5.4× fewer entities than v2 on the corpus,
-  and fewer even than v1 (which bought compactness with search). Belt turns collapse to 211
-  total vs v2's 1,867 — merges and flexible pins remove almost every needless jog. Tunnel
+- **Shape.** v3 is the *leanest* of the three: far fewer entities than v2 on the corpus,
+  and fewer even than v1 (which bought compactness with search). Belt turns collapse to 244
+  total vs v2's 1,111 — merges and flexible pins remove almost every needless jog. Tunnel
   crossings are the lowest of the three, and belts never tunnel across open ground (a dive
   only wins when the surface is actually blocked).
 - **Speed.** v3 averages ~110 ms with power planning, wired blueprints and the full
@@ -146,9 +147,12 @@ The tracked corpus is clean, so the edges are structural rather than case-by-cas
   escalation retries fluid graphs with more room). No such case exists in the corpus today;
   the failure-hunting playbook is to grow `corner_cases/` until one does.
 - **Placement is inherited from v2.** The router can only negotiate over the space placement
-  leaves. Densely-packed columns with belt-only graphs have no escalation axis yet (a gutter
-  widening retry is the obvious next lever if a case ever demands it).
-- **Rates and power** as above — the oracle's scope, not the router's.
+  leaves. Rate-solver graphs get extra machine spacing plus the vgap escalation ladder
+  (their arms x ports density demanded it); plain belt-only graphs still compile at the
+  base pitch — a gutter-widening retry is the obvious next lever if a case ever demands it.
+- **Throughput.** The verifier certifies connectivity; rate-sized builds are validated by
+  game-in-the-loop simulation instead (see `docs/RATES.md`). A static capacity check inside
+  the oracle (PASS ⇒ every link sustains the plan) is designed but not yet implemented.
 
 ## Tests
 

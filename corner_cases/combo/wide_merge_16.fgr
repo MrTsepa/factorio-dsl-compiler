@@ -1,5 +1,5 @@
 # Wide merge N=16: 16 input chests merge directly onto ONE collector belt to output.
-# STATUS (engine c4e0bad): PASS (verifies)
+# STATUS (engine 03798ac): PASS (verifies)
 
 input in0 : iron-plate
 input in1 : iron-plate

@@ -1,6 +1,6 @@
 # OUTPUT-DRIVEN, two stages: 1 electronic circuit per second.
-# Circuits eat 3 cables/craft -> both stages multi-copy, each circuit machine
-# gets its own dedicated cable lane (multi-arm as separate same-product lanes).
+# Circuits eat 3 cables/craft -> two cable arms per circuit machine; both stages
+# also run 2 output arms where the output rate demands it.
 input copper : copper-plate
 input iron : iron-plate
 assembler cable : copper-cable

@@ -1,5 +1,5 @@
 # High fan-in N=4: 4 producers merge onto ONE collector belt into a 1x1 output.
-# STATUS (engine c4e0bad): PASS (verifies)
+# STATUS (engine 03798ac): PASS (verifies)
 
 input iron : iron-plate
 assembler p0 : iron-gear-wheel

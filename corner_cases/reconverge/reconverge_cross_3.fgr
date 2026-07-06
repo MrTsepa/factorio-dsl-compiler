@@ -1,5 +1,5 @@
 # Two hubs each fan out to the SAME 6 consumers (cross reconverge).
-# STATUS (engine c4e0bad): PASS (verifies)
+# STATUS (engine 03798ac): PASS (verifies)
 
 input iron : iron-plate
 input cu : copper-plate

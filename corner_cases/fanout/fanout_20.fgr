@@ -1,5 +1,5 @@
 # Pure fan-out N=20: one assembler taps ONE belt to 20 output chests.
-# STATUS (engine c4e0bad): PASS (verifies)
+# STATUS (engine 03798ac): PASS (verifies)
 
 input iron : iron-plate
 assembler head : iron-gear-wheel
