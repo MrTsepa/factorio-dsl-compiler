@@ -57,23 +57,24 @@ def test_gears_bank_verifies_and_carries_target():
 
 
 def test_inapplicable_specs_fall_back():
-    # single-fluid stages bank now (battery does); TWO fluids per stage still
-    # fall back (two pipe networks per row -- sulfur-class, pending)
+    # fluids bank now (1- and 2-fluid stages); MULTI-OUTPUT specs are the stable
+    # fallback shape (the bank template has exactly one collector boundary)
     from fgr.layout_bank import BankInapplicable, compile_bank
     from fgr.rates import RatesUnavailable
-    two_fluid = parse("\n".join([
-        "fluid water : water",
-        "fluid gas : petroleum-gas",
-        "chemical sulfur : sulfur",
-        "output out @ 0.5/s",
+    multi_out = parse("\n".join([
+        "input iron : iron-plate",
+        "assembler gears : iron-gear-wheel",
+        "assembler sticks : iron-stick",
+        "output a @ 1/s",
+        "output b @ 1/s",
         "",
-        "water ~> sulfur",
-        "gas ~> sulfur",
-        "sulfur -> out",
+        "iron -> gears, sticks",
+        "gears -> a",
+        "sticks -> b",
     ]))
     try:
         with pytest.raises(BankInapplicable):
-            compile_bank(two_fluid)
+            compile_bank(multi_out)
     except RatesUnavailable:
         pytest.skip("FBSR game data unavailable")
 
