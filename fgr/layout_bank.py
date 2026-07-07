@@ -195,6 +195,12 @@ def plan_dag(graph: Graph, dumper):
         for ing, (kind, src) in sources[n].items():
             if kind == "stage":
                 cons[src].add(n)
+    # pair rows + fluid stages in one spec: two open geometry interactions
+    # (adjacent trunk contamination, pair entry sides) -- fall back for now
+    has_pair = any(isinstance(v, list) for a in rows.values() for v in a.values())
+    if has_pair and any(fluid_ing.get(n) for n in order):
+        raise BankInapplicable("pair rows + fluid stages in one chain (pending)")
+
     chains: dict = {}
     for i, n in enumerate(order):
         nxt = order[i + 1] if i + 1 < len(order) else None
