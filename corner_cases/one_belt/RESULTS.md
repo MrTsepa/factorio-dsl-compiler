@@ -4,7 +4,7 @@ One belt (15/s) of every bulk item, REALISTIC targets for the rest (science =
 1/s = 60 SPM, buildings = 1/s — user-set policy). Graded by the verifier + the
 side-aware placed-layout flow oracle. `/goal`: all 61; metric: entities.
 
-**58 / 61 pass** (all 58 as banks; 263,015 total entities, median 1365). Remaining 3 = the 4-ingredient stages (assembling-machine-2, bulk-inserter, flying-robot-frame): the bank template
+**59 / 61 pass** (58 as banks + flying_robot_frame routed; 263,015 total entities, median 1365). Remaining 3 = the 4-ingredient stages (assembling-machine-2, bulk-inserter, flying-robot-frame): the bank template
 fits 3 item rows; the 4th needs paired lanes or per-machine feeder stubs —
 the last tracked geometry.
 
