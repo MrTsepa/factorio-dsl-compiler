@@ -10,7 +10,7 @@ assembler iron_gear_wheel : iron-gear-wheel
 assembler inserter : inserter
 assembler transport_belt : transport-belt
 assembler logistic_science_pack : logistic-science-pack
-output    out @ 15.0/s
+output    out @ 1/s
 
 copper_plate -> copper_cable
 iron_plate -> electronic_circuit

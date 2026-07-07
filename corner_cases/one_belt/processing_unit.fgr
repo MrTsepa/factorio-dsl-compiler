@@ -12,7 +12,7 @@ assembler electronic_circuit : electronic-circuit
 chemical  plastic_bar : plastic-bar
 assembler advanced_circuit : advanced-circuit
 assembler processing_unit : processing-unit
-output    out @ 15.0/s
+output    out @ 1/s
 
 copper_plate -> copper_cable
 iron_plate -> electronic_circuit

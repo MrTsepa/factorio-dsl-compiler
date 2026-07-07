@@ -54,6 +54,23 @@ ITEMS = [
     "chemical-science-pack", "production-science-pack",
 ]
 
+# Realistic per-item targets: a full belt of SCIENCE or of BUILDINGS is a megabase,
+# not a blueprint (user-set policy). Science = 1/s (the canonical 60 SPM); big
+# machines/buildings = 1/s; everything consumed in bulk keeps the full belt.
+TARGETS = {
+    "automation-science-pack": 1, "logistic-science-pack": 1,
+    "military-science-pack": 1, "chemical-science-pack": 1,
+    "production-science-pack": 1,
+    "assembling-machine-1": 1, "assembling-machine-2": 1,
+    "electric-furnace": 1, "steel-furnace": 1, "stone-furnace": 1,
+    "lab": 1, "radar": 1, "electric-mining-drill": 1, "solar-panel": 1,
+    "accumulator": 1, "steam-engine": 1, "boiler": 1, "pump": 1,
+    "storage-tank": 1, "substation": 1, "gun-turret": 1, "gate": 1,
+    "processing-unit": 1, "flying-robot-frame": 1, "electric-engine-unit": 1,
+    "engine-unit": 2, "bulk-inserter": 2, "advanced-circuit": 5,
+    "low-density-structure": 1, "rocket-fuel": 1,
+}
+
 RAW_ITEMS = {"iron-plate", "copper-plate", "stone", "coal", "wood", "uranium-238",
              "iron-ore",      # concrete mixes ore directly
              "solid-fuel"}    # made by oil variants (recipe name != item name)
@@ -109,7 +126,7 @@ def build_spec(item, dumper):
     order = [it for it in _topo(stages)]
     for it in order:
         lines.append(f"{stages[it]['kind']:<9} {_ident(it)} : {it}")
-    lines.append(f"output    out @ {BELT_FULL}/s")
+    lines.append(f"output    out @ {TARGETS.get(item, BELT_FULL)}/s")
     lines.append("")
     for it in order:
         for ing, typ in stages[it]["ings"]:

@@ -7,7 +7,7 @@ input     stone : stone
 furnace   steel_plate : steel-plate
 furnace   stone_brick : stone-brick
 assembler steel_furnace : steel-furnace
-output    out @ 15.0/s
+output    out @ 1/s
 
 iron_plate -> steel_plate
 stone -> stone_brick

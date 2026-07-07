@@ -14,7 +14,7 @@ assembler advanced_circuit : advanced-circuit
 assembler inserter : inserter
 assembler fast_inserter : fast-inserter
 assembler bulk_inserter : bulk-inserter
-output    out @ 15.0/s
+output    out @ 2/s
 
 iron_plate -> iron_gear_wheel
 copper_plate -> copper_cable

@@ -4,7 +4,7 @@
 
 input     stone : stone
 assembler stone_furnace : stone-furnace
-output    out @ 15.0/s
+output    out @ 1/s
 
 stone -> stone_furnace
 stone_furnace -> out

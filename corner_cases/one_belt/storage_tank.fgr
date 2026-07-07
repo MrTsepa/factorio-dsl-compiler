@@ -5,7 +5,7 @@
 input     iron_plate : iron-plate
 furnace   steel_plate : steel-plate
 assembler storage_tank : storage-tank
-output    out @ 15.0/s
+output    out @ 1/s
 
 iron_plate -> steel_plate
 iron_plate -> storage_tank

@@ -11,7 +11,7 @@ furnace   steel_plate : steel-plate
 assembler copper_cable : copper-cable
 assembler electronic_circuit : electronic-circuit
 assembler gate : gate
-output    out @ 15.0/s
+output    out @ 1/s
 
 stone -> stone_brick
 stone_brick -> stone_wall

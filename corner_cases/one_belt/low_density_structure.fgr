@@ -9,7 +9,7 @@ fluid     petroleum_gas_src : petroleum-gas
 furnace   steel_plate : steel-plate
 chemical  plastic_bar : plastic-bar
 assembler low_density_structure : low-density-structure
-output    out @ 15.0/s
+output    out @ 1/s
 
 iron_plate -> steel_plate
 petroleum_gas_src ~> plastic_bar

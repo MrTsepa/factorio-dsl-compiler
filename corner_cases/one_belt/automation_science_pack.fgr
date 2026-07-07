@@ -6,7 +6,7 @@ input     copper_plate : copper-plate
 input     iron_plate : iron-plate
 assembler iron_gear_wheel : iron-gear-wheel
 assembler automation_science_pack : automation-science-pack
-output    out @ 15.0/s
+output    out @ 1/s
 
 iron_plate -> iron_gear_wheel
 copper_plate -> automation_science_pack

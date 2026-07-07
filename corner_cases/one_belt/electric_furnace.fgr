@@ -14,7 +14,7 @@ chemical  plastic_bar : plastic-bar
 assembler advanced_circuit : advanced-circuit
 furnace   stone_brick : stone-brick
 assembler electric_furnace : electric-furnace
-output    out @ 15.0/s
+output    out @ 1/s
 
 iron_plate -> steel_plate
 copper_plate -> copper_cable

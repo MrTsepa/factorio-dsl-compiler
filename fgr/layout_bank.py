@@ -182,16 +182,21 @@ def plan_dag(graph: Graph, dumper):
         for ing, (kind, src) in sources[n].items():
             if kind == "stage":
                 cons[src].add(n)
+    chains: dict = {}
     for i, n in enumerate(order):
         nxt = order[i + 1] if i + 1 < len(order) else None
-        n_ports = len([c for c in cons[n] if c != nxt]) + \
-            (1 if nxt in cons[n] else 0)
+        lh = sorted((c for c in cons[n] if c != nxt), key=order.index)
         max_ports = 1 if rows[n].get("nearS") else 2
-        if n and n_ports > max_ports:
-            raise BankInapplicable(
-                f"stage {n} needs {n_ports} output rows (arm reach fits "
-                f"{max_ports})")
-    return order, raws, outputs[0], product, needs, sources, rows, fluid_ing
+        n_slots = max_ports - (1 if nxt in cons[n] else 0)
+        if lh and n_slots < 1:
+            raise BankInapplicable(f"stage {n}: no output row left for long-hauls")
+        # CASCADE: split lh consumers into <= n_slots chains; a chain's row serves
+        # its head from the east margin, and the leftover wraps around the WEST
+        # margin down to the next member (combined flow shares the lane)
+        chains[n] = [lh[j::min(n_slots, len(lh))]
+                     for j in range(min(n_slots, len(lh)))] if lh else []
+    return (order, raws, outputs[0], product, needs, sources, rows, chains,
+            fluid_ing)
 
 
 _ARM_RATE = {"farN": LONG_ARM_PICK, "nearN": ARM_BELT_PICK, "nearS": ARM_BELT_PICK}
@@ -245,8 +250,8 @@ def compile_bank(graph: Graph, dumper="auto"):
         dumper = fv._fbsr_dumper()
     if dumper is None:
         raise RatesUnavailable("FBSR dumper unavailable")
-    stages, raws, out_node, product, needs, sources, row_assign, fluid_ing = \
-        plan_dag(graph, dumper)
+    (stages, raws, out_node, product, needs, sources, row_assign, lh_chains,
+     fluid_ing) = plan_dag(graph, dumper)
 
     caps, out_amt = {}, {}
     for n in stages:
@@ -339,21 +344,19 @@ def compile_bank(graph: Graph, dumper="auto"):
 
     # ---- long-haul lane budgets: unlike the adjacent bus (local, interleaved flow),
     # a long-haul row carries its AGGREGATE flow through the margin -- and a
-    # drop-fed row is ONE lane (7.5/s)
-    for i, n in enumerate(stages):
-        nxt = stages[i + 1] if i + 1 < len(stages) else None
-        for c, amt in consumers[n]:
-            if c == nxt:
-                continue
-            flow = unit[c] * amt * target / max(blocks_hint(raw_unit, target), 1)
-            if flow > LANE_CAP * LANE_HEADROOM + 1e-9:
-                raise BankInapplicable(
-                    f"long-haul {n}->{c} needs {flow:.1f}/s on one drop-fed lane "
-                    f"(cap {LANE_CAP * LANE_HEADROOM:.1f})")
+    # drop-fed row is ONE lane (7.5/s). Rather than reject, RAISE the block count
+    # until every link's per-block flow fits its lane.
+    def chain_flow(n, chain):
+        return sum(unit[c] * needs[c].get(product[n], 0.0) for c in chain) * target
+    lh_blocks = 1
+    for n in stages:
+        for chain in lh_chains[n]:
+            lh_blocks = max(lh_blocks, math.ceil(
+                chain_flow(n, chain) / (LANE_CAP * LANE_HEADROOM)))
 
     # ---- blocks -------------------------------------------------------------------------
     lane_usable = BELT_FULL * LANE_HEADROOM
-    blocks = 1
+    blocks = lh_blocks
     for ing, d in raw_unit.items():
         blocks = max(blocks, math.ceil(d * target / lane_usable))
     # every block must cover its collector share on its own (a floored block
@@ -431,7 +434,7 @@ def compile_bank(graph: Graph, dumper="auto"):
                 r["nearS"] = y
                 y += 1
             nxt = stages[i + 1] if i + 1 < len(stages) else None
-            lh = sorted({c for c, _amt in consumers[n] if c != nxt})
+            lh = [ch[0] for ch in lh_chains[n]]
             if n == last_stage:
                 block_out = per_block[n][b] * slots[n]["rate"] * out_amt[n]
                 n_coll = (1 if blocks > 1
@@ -447,9 +450,9 @@ def compile_bank(graph: Graph, dumper="auto"):
                 # long-haul rows FIRST, the adjacent bus LAST: the bus must sit
                 # directly above the next stage's rows (its consumers' long arms
                 # reach exactly two rows up)
-                for c in lh:
-                    r[("lh", c)] = y
-                    lh_links.append((n, c, b))
+                for ch in lh_chains[n]:
+                    r[("lh", ch[0])] = y
+                    lh_links.append((n, tuple(ch), b))
                     y += 1
                 if any(c == nxt for c, _amt in consumers[n]):
                     r["bus"] = y
@@ -544,7 +547,7 @@ def compile_bank(graph: Graph, dumper="auto"):
                         (r[slot], slot == "nearN" and not fluid_ing[n]))
             xs = stage_xs[(n, b)]
             nxt = stages[i + 1] if i + 1 < len(stages) else None
-            lh = sorted({c for c, _amt in consumers[n] if c != nxt})
+            lh = [ch[0] for ch in lh_chains[n]]
             # output ports (row per port), reach-gated in plan_dag
             if n == last_stage:
                 ports = [yy for yy, bb in collector_rows if bb == b]
@@ -560,9 +563,10 @@ def compile_bank(graph: Graph, dumper="auto"):
                     ports.append(r["bus"])
                     port_share.append(sum(unit[c] * amt for c, amt in consumers[n]
                                           if c == nxt))
-                for c in lh:
-                    ports.append(r[("lh", c)])
-                    port_share.append(unit[c] * needs[c].get(product[n], 0.0))
+                for ch in lh_chains[n]:
+                    ports.append(r[("lh", ch[0])])
+                    port_share.append(sum(unit[c] * needs[c].get(product[n], 0.0)
+                                          for c in ch))
                 tot = sum(port_share) or 1.0
                 port_share = [s / tot for s in port_share]
             for k in range(nb):
@@ -689,9 +693,10 @@ def compile_bank(graph: Graph, dumper="auto"):
                 lay.add(PlacedEntity(BELT, x, yy, direction=W_DIR, meta=tag))
                 x -= 1
 
-    for (src, dst, b) in lh_links:
-        y_src = ypos[(src, b)][("lh", dst)]
-        y_dst = dst_row(src, dst, b)
+    wcol_next = [X_IN - 9]                         # west margin column allocator
+    for (src, chain, b) in lh_links:
+        y_src = ypos[(src, b)][("lh", chain[0])]
+        y_dst = dst_row(src, chain[0], b)
         col = next_col
         next_col += 3
         tag = {"net": f"b:{src}"}
@@ -702,6 +707,22 @@ def compile_bank(graph: Graph, dumper="auto"):
         lay.add(PlacedEntity(BELT, col, y_dst, direction=W_DIR, meta=tag))
         _run_west(col - 1, X_IN + 2, y_dst, tag)
         taken_cols.append((col, min(y_src, y_dst), max(y_src, y_dst)))
+        # CASCADE: the leftover wraps around the WEST margin to later members
+        prev_y = y_dst
+        for c2 in chain[1:]:
+            y2 = dst_row(src, c2, b)
+            wcol = wcol_next[0]
+            wcol_next[0] -= 2
+            for x in range(X_IN + 2, wcol, -1):
+                lay.add(PlacedEntity(BELT, x, prev_y, direction=W_DIR, meta=tag))
+            lay.add(PlacedEntity(BELT, wcol, prev_y, direction=S, meta=tag))
+            for yv in range(prev_y + 1, y2):
+                lay.add(PlacedEntity(BELT, wcol, yv, direction=S, meta=tag))
+            lay.add(PlacedEntity(BELT, wcol, y2, direction=E, meta=tag))
+            for x in range(wcol + 1, X_IN + 3):
+                lay.add(PlacedEntity(BELT, x, y2, direction=E, meta=tag))
+            belt_row(y2, src)                      # c2's row flows EAST, fed west
+            prev_y = y2
 
     # ---- raw boundaries ------------------------------------------------------------------
     split_ct = 0
@@ -862,9 +883,11 @@ def compile_bank(graph: Graph, dumper="auto"):
                     # (arms are recorded under the SOURCE's port row: the bus row for
                     # adjacent consumers, the source-side lh row for long-hauls)
                     src_r = ypos[(src, b)]
-                    port_row = src_r["bus"] if ("bus" in src_r and
-                                                ypos[(n, b)][slot] == src_r["bus"]) \
-                        else src_r.get(("lh", n))
+                    if "bus" in src_r and ypos[(n, b)][slot] == src_r["bus"]:
+                        port_row = src_r["bus"]
+                    else:                          # chain member: the HEAD's row
+                        head = next(ch[0] for ch in lh_chains[src] if n in ch)
+                        port_row = src_r.get(("lh", head))
                     feeders = port_feeders.get((src, port_row), {})
                     adjacent = (i and src == stages[i - 1]
                                 and slot in ("farN", "nearN"))

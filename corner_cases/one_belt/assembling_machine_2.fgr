@@ -10,7 +10,7 @@ assembler electronic_circuit : electronic-circuit
 assembler iron_gear_wheel : iron-gear-wheel
 assembler assembling_machine_1 : assembling-machine-1
 assembler assembling_machine_2 : assembling-machine-2
-output    out @ 15.0/s
+output    out @ 1/s
 
 iron_plate -> steel_plate
 copper_plate -> copper_cable

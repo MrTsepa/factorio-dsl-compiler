@@ -5,7 +5,7 @@
 input     solid_fuel : solid-fuel
 fluid     light_oil_src : light-oil
 assembler rocket_fuel : rocket-fuel
-output    out @ 15.0/s
+output    out @ 1/s
 
 solid_fuel -> rocket_fuel
 light_oil_src ~> rocket_fuel

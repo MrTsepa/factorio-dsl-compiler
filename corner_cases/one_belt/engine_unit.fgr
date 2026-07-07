@@ -7,7 +7,7 @@ furnace   steel_plate : steel-plate
 assembler iron_gear_wheel : iron-gear-wheel
 assembler pipe : pipe
 assembler engine_unit : engine-unit
-output    out @ 15.0/s
+output    out @ 2/s
 
 iron_plate -> steel_plate
 iron_plate -> iron_gear_wheel

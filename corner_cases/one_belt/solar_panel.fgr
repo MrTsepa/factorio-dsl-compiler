@@ -8,7 +8,7 @@ furnace   steel_plate : steel-plate
 assembler copper_cable : copper-cable
 assembler electronic_circuit : electronic-circuit
 assembler solar_panel : solar-panel
-output    out @ 15.0/s
+output    out @ 1/s
 
 iron_plate -> steel_plate
 copper_plate -> copper_cable

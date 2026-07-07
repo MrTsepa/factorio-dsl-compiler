@@ -15,7 +15,7 @@ assembler electronic_circuit : electronic-circuit
 assembler electric_engine_unit : electric-engine-unit
 chemical  battery : battery
 assembler flying_robot_frame : flying-robot-frame
-output    out @ 15.0/s
+output    out @ 1/s
 
 iron_plate -> steel_plate
 iron_plate -> iron_gear_wheel

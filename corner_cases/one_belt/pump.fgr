@@ -8,7 +8,7 @@ assembler iron_gear_wheel : iron-gear-wheel
 assembler pipe : pipe
 assembler engine_unit : engine-unit
 assembler pump : pump
-output    out @ 15.0/s
+output    out @ 1/s
 
 iron_plate -> steel_plate
 iron_plate -> iron_gear_wheel

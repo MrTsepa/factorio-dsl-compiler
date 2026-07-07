@@ -13,7 +13,7 @@ assembler grenade : grenade
 furnace   stone_brick : stone-brick
 assembler stone_wall : stone-wall
 assembler military_science_pack : military-science-pack
-output    out @ 15.0/s
+output    out @ 1/s
 
 iron_plate -> firearm_magazine
 iron_plate -> steel_plate

@@ -18,7 +18,7 @@ assembler productivity_module : productivity-module
 assembler iron_stick : iron-stick
 assembler rail : rail
 assembler production_science_pack : production-science-pack
-output    out @ 15.0/s
+output    out @ 1/s
 
 iron_plate -> steel_plate
 copper_plate -> copper_cable

@@ -7,7 +7,7 @@ input     iron_plate : iron-plate
 fluid     sulfuric_acid_src : sulfuric-acid
 chemical  battery : battery
 assembler accumulator : accumulator
-output    out @ 15.0/s
+output    out @ 1/s
 
 sulfuric_acid_src ~> battery
 iron_plate -> battery

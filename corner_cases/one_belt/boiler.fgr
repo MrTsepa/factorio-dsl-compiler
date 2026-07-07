@@ -7,7 +7,7 @@ input     stone : stone
 assembler stone_furnace : stone-furnace
 assembler pipe : pipe
 assembler boiler : boiler
-output    out @ 15.0/s
+output    out @ 1/s
 
 stone -> stone_furnace
 iron_plate -> pipe
