@@ -195,11 +195,6 @@ def plan_dag(graph: Graph, dumper):
         for ing, (kind, src) in sources[n].items():
             if kind == "stage":
                 cons[src].add(n)
-    # pair rows + fluid stages in one spec: two open geometry interactions
-    # (adjacent trunk contamination, pair entry sides) -- fall back for now
-    has_pair = any(isinstance(v, list) for a in rows.values() for v in a.values())
-    if has_pair and any(fluid_ing.get(n) for n in order):
-        raise BankInapplicable("pair rows + fluid stages in one chain (pending)")
 
     chains: dict = {}
     for i, n in enumerate(order):
@@ -447,6 +442,7 @@ def compile_bank(graph: Graph, dumper="auto"):
             r: dict = {}
             prev = stages[i - 1] if i else None
             if fluid_ing[n] and not rotated[n]:
+                y += 1                             # spacer: trunks must never touch
                 for fi_, f in enumerate(fluid_ing[n]):
                     r[("trunk", fi_)] = y
                     r[("pair", fi_)] = y + 1
@@ -500,6 +496,7 @@ def compile_bank(graph: Graph, dumper="auto"):
                     r[("pair", fi_)] = y
                     r[("trunk", fi_)] = y + 1
                     y += 2
+                y += 1                             # spacer: trunks must never touch
             ypos[(n, b)] = r
         y += 3
 
@@ -804,10 +801,11 @@ def compile_bank(graph: Graph, dumper="auto"):
                           {"net": tag["net"], "pair_products": "1"})
                 pair_rows_done[(y_dst, b)] = col
             return y_dst                           # push from (col, y_dst-1) S
-        # side == 'S': continue past the row, curve west, push north into row_e-1
+        # side == 'S': continue past the row, curve west (hop-aware: other pair
+        # deliverers' descents cross this margin row), push north into the row's
+        # east-end tile
         lay.add(PlacedEntity(BELT, col, y_dst + 1, direction=W_DIR, meta=tag))
-        for x in range(col - 1, row_e, -1):
-            lay.add(PlacedEntity(BELT, x, y_dst + 1, direction=W_DIR, meta=tag))
+        _run_west(col - 1, row_e, y_dst + 1, tag)
         lay.add(PlacedEntity(BELT, row_e, y_dst + 1, direction=N, meta=tag))
         return y_dst + 1
 
