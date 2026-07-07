@@ -135,9 +135,9 @@ def plan_dag(graph: Graph, dumper):
     # per stage: ingredient -> ("raw", item) | ("stage", src_stage)
     sources: dict[str, dict] = {}
     for i, n in enumerate(order):
-        if len(needs[n]) > 3:
+        if len(needs[n]) > 4:
             raise BankInapplicable(f"stage {n} has {len(needs[n])} ingredients "
-                                   f"(template rows fit 3)")
+                                   f"(template rows fit 4)")
         src = {}
         for ing in needs[n]:
             if ing in raw_items:
@@ -168,7 +168,20 @@ def plan_dag(graph: Graph, dumper):
                 continue
             assign[slot] = pool.pop(0)
         if pool:
-            raise BankInapplicable(f"stage {n}: more belt inputs than template rows")
+            # 4th ingredient: PAIR it with the nearN occupant (two products, one
+            # per lane side, both delivered via the east margin which controls
+            # entry sides). Per-lane flow is kept legal by the long-haul block
+            # sizing (each member is its own chain).
+            extra = pool.pop(0)
+            mate = assign.get("nearN")
+            if (not pool and extra[1][0] == "stage" and mate
+                    and mate[1][0] == "stage"
+                    and mate[1] != ("stage", prev)):
+                assign["nearN"] = [mate, extra]
+            else:
+                raise BankInapplicable(
+                    f"stage {n}: more belt inputs than template rows (pairing "
+                    f"needs two stage-sourced inputs on nearN)")
         if "farN" in assign and "nearN" not in assign and adj:
             # bus-only stage: with no near row between, the adjacent bus sits at
             # depth 1 -- it belongs on the NEAR slot (normal arms)
@@ -193,6 +206,10 @@ def plan_dag(graph: Graph, dumper):
         # CASCADE: split lh consumers into <= n_slots chains; a chain's row serves
         # its head from the east margin, and the leftover wraps around the WEST
         # margin down to the next member (combined flow shares the lane)
+        def is_pair_dst(c):
+            v = rows[c].get("nearN")
+            return isinstance(v, list) and any(s == ("stage", n) for _i, s in v)
+        lh.sort(key=lambda c: (0 if is_pair_dst(c) else 1, order.index(c)))
         chains[n] = [lh[j::min(n_slots, len(lh))]
                      for j in range(min(n_slots, len(lh)))] if lh else []
     return (order, raws, outputs[0], product, needs, sources, rows, chains,
@@ -200,6 +217,17 @@ def plan_dag(graph: Graph, dumper):
 
 
 _ARM_RATE = {"farN": LONG_ARM_PICK, "nearN": ARM_BELT_PICK, "nearS": ARM_BELT_PICK}
+
+
+def _slot_members(v):
+    """A slot holds one (ing, src) or a PAIR [(ing, src), (ing, src)]."""
+    if v is None:
+        return []
+    return list(v) if isinstance(v, list) else [v]
+
+
+def _slot_amount(needs, v):
+    return sum(needs[ing] for ing, _s in _slot_members(v))
 
 
 def _stage_slots(cap, needs, assign, out_amount, has_s_input, s_face_slots=3,
@@ -224,7 +252,8 @@ def _stage_slots(cap, needs, assign, out_amount, has_s_input, s_face_slots=3,
                         if k == 0:
                             ok = False
                             continue
-                        x = min(x, k * _ARM_RATE[slot] / needs[ing[0]] * SAFETY)
+                        amt = _slot_amount(needs, ing)
+                        x = min(x, k * _ARM_RATE[slot] / amt * SAFETY)
                     if not ok:
                         continue
                     out_rate = LONG_ARM_PICK if has_s_input else ARM_CHEST_PICK
@@ -329,8 +358,10 @@ def compile_bank(graph: Graph, dumper="auto"):
     if target > BELT_FULL + 1e-9:
         raise BankInapplicable("more than one full output belt not yet supported")
 
-    counts = {n: max(1, math.ceil(unit[n] * target / slots[n]["rate"]))
-              for n in stages}
+    counts = {}
+    for n in stages:
+        margin = 1.3 if isinstance(row_assign[n].get("nearN"), list) else 1.0
+        counts[n] = max(1, math.ceil(unit[n] * target * margin / slots[n]["rate"]))
     for i, cap in in_rates.items():               # appetite clamp (input-driven)
         usable = cap * LANE_HEADROOM
         for n in stages:
@@ -415,7 +446,8 @@ def compile_bank(graph: Graph, dumper="auto"):
                     r[("pair", fi_)] = y + 1
                     y += 2
             adj_far = (a.get("farN") and a["farN"][1] == ("stage", prev))
-            adj_near = (a.get("nearN") and a["nearN"][1] == ("stage", prev))
+            adj_near = (a.get("nearN") and not isinstance(a["nearN"], list)
+                        and a["nearN"][1] == ("stage", prev))
             if a.get("farN") and not adj_far:
                 r["farN"] = y
                 y += 1
@@ -466,11 +498,17 @@ def compile_bank(graph: Graph, dumper="auto"):
         y += 3
 
     def dst_row(src, dst, b):
+        """(row_y, pair_side) -- pair_side is None for plain rows, else 'N'/'S'
+        entry for this source's product."""
         a = row_assign[dst]
         for slot in ("farN", "nearN", "nearS"):
-            ing = a.get(slot)
-            if ing and ing[1] == ("stage", src):
-                return ypos[(dst, b)][slot]
+            v = a.get(slot)
+            for mi, ing in enumerate(_slot_members(v)):
+                if ing[1] == ("stage", src):
+                    side = None
+                    if isinstance(v, list):
+                        side = "N" if mi == 0 else "S"
+                    return ypos[(dst, b)][slot], side
         raise BankInapplicable(f"no input row on {dst} for {src}")
 
     # ---- positions: prefix demand along adjacent buses ---------------------------------
@@ -541,10 +579,10 @@ def compile_bank(graph: Graph, dumper="auto"):
             nb = per_block[n][b]
             sl = slots[n]
             for slot in ("farN", "nearN", "nearS"):
-                ing = a.get(slot)
-                if ing and ing[1][0] == "raw":
-                    raw_rows_pending.setdefault(ing[1][1], []).append(
-                        (r[slot], slot == "nearN" and not fluid_ing[n]))
+                for ing in _slot_members(a.get(slot)):
+                    if ing[1][0] == "raw":
+                        raw_rows_pending.setdefault(ing[1][1], []).append(
+                            (r[slot], slot == "nearN" and not fluid_ing[n]))
             xs = stage_xs[(n, b)]
             nxt = stages[i + 1] if i + 1 < len(stages) else None
             lh = [ch[0] for ch in lh_chains[n]]
@@ -617,12 +655,25 @@ def compile_bank(graph: Graph, dumper="auto"):
                                          direction=S, meta={"role": "in"}))
                     si += 1
                 for j in range(sl["k_out"]):
-                    gi = k * sl["k_out"] + j       # deal arm gi to the port whose
-                    acc, tgt = 0.0, ports[0]       # cumulative share bucket it hits
-                    frac = (gi + 0.5) / max(nb * sl["k_out"], 1)
-                    for p_i, share in enumerate(port_share):
-                        acc += share
-                        if frac <= acc + 1e-9:
+                    gi = k * sl["k_out"] + j
+                    # largest-remainder arm allocation with a >=1 floor per port:
+                    # frac buckets starved ports whose share < 1/(arms per block)
+                    if gi == 0:
+                        n_arms = max(nb * sl["k_out"], len(ports))
+                        alloc = [max(1, round(s * n_arms)) for s in port_share]
+                        while sum(alloc) > n_arms and max(alloc) > 1:
+                            alloc[alloc.index(max(alloc))] -= 1
+                        while sum(alloc) < n_arms:
+                            alloc[alloc.index(max(alloc))] += 1
+                        cuts = []
+                        acc_a = 0
+                        for a_ in alloc:
+                            acc_a += a_
+                            cuts.append(acc_a)
+                        r["_cuts"] = cuts
+                    tgt = ports[-1]
+                    for p_i, cut in enumerate(r["_cuts"]):
+                        if gi < cut:
                             tgt = ports[p_i]
                             break
                     real_depth = tgt - r["arm_out"]
@@ -662,10 +713,11 @@ def compile_bank(graph: Graph, dumper="auto"):
     next_col = W + 3
     taken_cols: list = []                          # (col, y_lo, y_hi)
 
-    def _run_east(x0, x1, yy, tag):
+    def _run_east(x0, x1, yy, tag, cols=None):
+        cols = taken_cols if cols is None else cols
         x = x0
         while x < x1:
-            block_col = next((c for c, lo, hi in taken_cols
+            block_col = next((c for c, lo, hi in cols
                               if c == x + 1 and lo <= yy <= hi), None)
             if block_col is not None and x + 2 < x1:
                 lay.add(PlacedEntity(UNDERGROUND, x, yy, direction=E,
@@ -677,11 +729,12 @@ def compile_bank(graph: Graph, dumper="auto"):
                 lay.add(PlacedEntity(BELT, x, yy, direction=E, meta=tag))
                 x += 1
 
-    def _run_west(x0, x1, yy, tag):
+    def _run_west(x0, x1, yy, tag, cols=None):
         """West-flowing run from x0 down to x1 (exclusive)."""
+        cols = taken_cols if cols is None else cols
         x = x0
         while x > x1:
-            block_col = next((c for c, lo, hi in taken_cols
+            block_col = next((c for c, lo, hi in cols
                               if c == x - 1 and lo <= yy <= hi), None)
             if block_col is not None and x - 2 > x1:
                 lay.add(PlacedEntity(UNDERGROUND, x, yy, direction=W_DIR,
@@ -693,35 +746,93 @@ def compile_bank(graph: Graph, dumper="auto"):
                 lay.add(PlacedEntity(BELT, x, yy, direction=W_DIR, meta=tag))
                 x -= 1
 
-    wcol_next = [X_IN - 9]                         # west margin column allocator
+    # PAIR rows need N-side deliverers processed FIRST: the row's east end is then
+    # fixed before any S-side column is allocated east of it (an S descent crossing
+    # a later row extension was the measured clash)
+    def _link_side(link):
+        src, chain, b = link
+        try:
+            _y, side = dst_row(src, chain[0], b)
+        except BankInapplicable:
+            side = None
+        return 1 if side == "S" else 0
+    lh_links.sort(key=lambda lk: (lk[2], _link_side(lk)))
+
+    wcol_next = [X_IN - 3]                         # west margin column allocator
+    #                                                (shared: consolidation splits
+    #                                                AND cascade wraps draw from it)
+
+    taken_wcols: list = []
+
+    def alloc_wcol():
+        c = wcol_next[0]
+        wcol_next[0] -= 3
+        return c
+    pair_rows_done: dict = {}                      # (y, b) -> east extent emitted
+
+    def deliver(src, dst, b, y_src_col, tag):
+        """Bring flow from the allocated column down into dst's input row."""
+        y_dst, side = dst_row(src, dst, b)
+        col = y_src_col
+        if side is None:
+            lay.add(PlacedEntity(BELT, col, y_dst, direction=W_DIR, meta=tag))
+            _run_west(col - 1, X_IN + 2, y_dst, tag)
+            return y_dst
+        # PAIR row: emit the shared west-flowing row ONCE (up to the first
+        # deliverer's column); later deliverers side-load their lane
+        if (y_dst, b) not in pair_rows_done:
+            pair_rows_done[(y_dst, b)] = col
+            members = _slot_members(row_assign[dst].get("nearN"))
+            prods = "|".join(product[m[1][1]] for m in members)
+            # the row INCLUDES (col, y_dst): both deliverers side-load that tile
+            # (north pushes south into it, south pushes north)
+            _run_west(col, X_IN + 2, y_dst,
+                      {"net": tag["net"], "pair_products": prods})
+        row_e = pair_rows_done[(y_dst, b)]
+        if side == "N":
+            # descent's last tile pushes straight south into a row tile; make sure
+            # the row REACHES this column -- hop-aware, since earlier deliverers'
+            # descent columns may cross the extension
+            if col > row_e:
+                _run_west(col - 1, row_e - 1, y_dst,
+                          {"net": tag["net"], "pair_products": "1"})
+                pair_rows_done[(y_dst, b)] = col
+            return y_dst                           # push from (col, y_dst-1) S
+        # side == 'S': continue past the row, curve west, push north into row_e-1
+        lay.add(PlacedEntity(BELT, col, y_dst + 1, direction=W_DIR, meta=tag))
+        for x in range(col - 1, row_e, -1):
+            lay.add(PlacedEntity(BELT, x, y_dst + 1, direction=W_DIR, meta=tag))
+        lay.add(PlacedEntity(BELT, row_e, y_dst + 1, direction=N, meta=tag))
+        return y_dst + 1
+
     for (src, chain, b) in lh_links:
         y_src = ypos[(src, b)][("lh", chain[0])]
-        y_dst = dst_row(src, chain[0], b)
+        y_dst, side0 = dst_row(src, chain[0], b)
         col = next_col
         next_col += 3
         tag = {"net": f"b:{src}"}
         _run_east(W, col, y_src, tag)
         lay.add(PlacedEntity(BELT, col, y_src, direction=S, meta=tag))
-        for yv in range(y_src + 1, y_dst):
+        stop_y = y_dst if side0 != "S" else y_dst + 1
+        for yv in range(y_src + 1, stop_y):
             lay.add(PlacedEntity(BELT, col, yv, direction=S, meta=tag))
-        lay.add(PlacedEntity(BELT, col, y_dst, direction=W_DIR, meta=tag))
-        _run_west(col - 1, X_IN + 2, y_dst, tag)
-        taken_cols.append((col, min(y_src, y_dst), max(y_src, y_dst)))
+        end_y = deliver(src, chain[0], b, col, tag)
+        taken_cols.append((col, min(y_src, end_y), max(y_src, end_y)))
         # CASCADE: the leftover wraps around the WEST margin to later members
         prev_y = y_dst
         for c2 in chain[1:]:
-            y2 = dst_row(src, c2, b)
-            wcol = wcol_next[0]
-            wcol_next[0] -= 2
-            for x in range(X_IN + 2, wcol, -1):
-                lay.add(PlacedEntity(BELT, x, prev_y, direction=W_DIR, meta=tag))
+            y2, side2 = dst_row(src, c2, b)
+            if side2 is not None:
+                raise BankInapplicable("pair row mid-cascade not supported")
+            wcol = alloc_wcol()
+            _run_west(X_IN + 2, wcol, prev_y, tag, cols=taken_wcols)
             lay.add(PlacedEntity(BELT, wcol, prev_y, direction=S, meta=tag))
             for yv in range(prev_y + 1, y2):
                 lay.add(PlacedEntity(BELT, wcol, yv, direction=S, meta=tag))
             lay.add(PlacedEntity(BELT, wcol, y2, direction=E, meta=tag))
-            for x in range(wcol + 1, X_IN + 3):
-                lay.add(PlacedEntity(BELT, x, y2, direction=E, meta=tag))
+            _run_east(wcol + 1, X_IN + 3, y2, tag, cols=taken_wcols)
             belt_row(y2, src)                      # c2's row flows EAST, fed west
+            taken_wcols.append((wcol, min(prev_y, y2), max(prev_y, y2)))
             prev_y = y2
 
     # ---- raw boundaries ------------------------------------------------------------------
@@ -745,7 +856,7 @@ def compile_bank(graph: Graph, dumper="auto"):
             lay.add(PlacedEntity(SPLITTER, X_IN + 3, y0, direction=E, meta=tag_i))
             for x in range(X_IN + 4, W):
                 lay.add(PlacedEntity(BELT, x, y0, direction=E, meta=tag_i))
-            dcol = X_IN - 1 - 2 * split_ct     # unique descent column per item
+            dcol = alloc_wcol()                # shared west-margin allocator
             lay.add(PlacedEntity(BELT, X_IN + 4, y0 + 1, direction=E, meta=tag_i))
             lay.add(PlacedEntity(BELT, X_IN + 5, y0 + 1, direction=S, meta=tag_i))
             lay.add(PlacedEntity(BELT, X_IN + 5, y0 + 2, direction=W_DIR,
@@ -867,9 +978,7 @@ def compile_bank(graph: Graph, dumper="auto"):
             a = row_assign[n]
             block_copies = _block_slice(copies[n], per_block[n], b)
             for slot in ("farN", "nearN", "nearS"):
-                ing = a.get(slot)
-                if not ing:
-                    continue
+              for ing in _slot_members(a.get(slot)):
                 if ing[1][0] == "raw":
                     reg = raw_rows_pending[ing[1][1]]
                     iname = (reg.get("iname") if isinstance(reg, dict) and

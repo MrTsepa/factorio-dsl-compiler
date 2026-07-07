@@ -219,6 +219,10 @@ def estimate(graph: Graph, layout: Layout, dumper="auto") -> dict:
         owner = net[2:].split(".")[0]
         # bank nets are tagged with the STAGE name; the expanded graph holds copies
         prod = product.get(owner) or product.get(f"{owner}_1")
+        pp = (e.meta or {}).get("pair_products")
+        if pp and "|" in pp:
+            prod = tuple(pp.split("|"))            # a PAIR row: two products,
+            #                                        one per lane side
         if prod is None:
             continue
         if e.proto in (BELT, UNDERGROUND):
@@ -270,7 +274,14 @@ def estimate(graph: Graph, layout: Layout, dumper="auto") -> dict:
                     name = drop[1]
                     ing = (product.get(pick[1]) if pick[0] == "body"
                            else carrier_product.get(pick))
-                    if ing is not None:
+                    if isinstance(ing, tuple):     # pair row: split by recipe ratio
+                        amts = [m_needs.get(name, {}).get(i, (0, ""))[0]
+                                for i in ing]
+                        tot = sum(amts) or 1.0
+                        for i, a in zip(ing, amts):
+                            new_inflow[(name, i)] = new_inflow.get((name, i),
+                                                                   0.0) + f * a / tot
+                    elif ing is not None:
                         new_inflow[(name, ing)] = new_inflow.get((name, ing), 0.0) + f
                 else:
                     agg[drop] = agg.get(drop, 0.0) + f
